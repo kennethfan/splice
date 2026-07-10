@@ -1,12 +1,6 @@
-Step 3: Frontend three-pane layout + conflict block interactions
+Fix: Magic Merge now returns full MergeSession, not just result counts
 
-New files:
-  - components/ConflictBlock.tsx: conflict block card with resolve buttons
-  - components/ConflictNav.tsx: bottom navigation bar with actions
-  - hooks/useKeyboard.ts: global keyboard shortcuts (Cmd+'/. /m/s/o)
-  - hooks/useSyncScroll.ts: three-pane synchronized scrolling
-
-Changes:
-  - App.tsx: full rewrite with Tauri IPC integration and state management
-  - splice.css: conflict block styles, progress bar, toast, line numbers
-  - lib/tauri.ts: IPC params aligned to Rust snake_case convention
+Rust magic_merge command now returns MergeSession instead of
+MagicMergeResult, so the frontend can use the resolved state
+directly without re-reading from disk. Frontend tauri.ts and
+App.tsx updated accordingly.

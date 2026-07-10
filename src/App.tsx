@@ -81,20 +81,15 @@ function App() {
   const handleMagicMerge = useCallback(async () => {
     if (!session) return;
     try {
-      const result = await magicMerge(sessionIdRef.current);
-      // Magic merge only modified in-memory state in the backend.
-      // We need to refresh the session to get the updated conflicts.
-      // Since the Rust backend returned the result but didn't return
-      // the updated session, re-open the file to get fresh state.
-      // In a future iteration, the magic_merge command should return
-      // the full updated session.
-      const updated = await openFile(session.file_path);
+      const updated = await magicMerge(sessionIdRef.current);
       setSession(updated);
-      // Show result
+      // Show result toast
+      const resolved = updated.resolved_count;
+      const remaining = updated.total_count - resolved;
       setError(
-        result.remaining > 0
-          ? `✨ Auto-resolved ${result.auto_resolved}, ${result.remaining} remaining`
-          : `✨ All ${result.auto_resolved} conflicts auto-resolved!`
+        remaining > 0
+          ? `✨ Auto-resolved ${resolved} conflicts, ${remaining} remaining`
+          : `✨ All ${resolved} conflicts resolved!`
       );
       setTimeout(() => setError(null), 3000);
     } catch (err) {

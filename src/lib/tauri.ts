@@ -63,8 +63,8 @@ export async function resolveConflict(
 
 export async function magicMerge(
   _session_id: number
-): Promise<MagicMergeResult> {
-  return invoke<MagicMergeResult>("magic_merge", { _session_id });
+): Promise<MergeSession> {
+  return invoke<MergeSession>("magic_merge", { _session_id });
 }
 
 export async function saveFile(): Promise<void> {

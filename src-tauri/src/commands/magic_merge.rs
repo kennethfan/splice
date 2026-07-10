@@ -3,18 +3,18 @@ use std::sync::Mutex;
 use crate::parser;
 
 /// Automatically resolve all non-conflicting changes.
-/// Only lines where both LOCAL and REMOTE changed remain unresolved.
+/// Returns the full updated MergeSession so the frontend can use it directly.
 #[tauri::command]
 pub fn magic_merge(
     _session_id: usize,
     state: tauri::State<'_, Mutex<Option<parser::MergeSession>>>,
-) -> Result<parser::MagicMergeResult, String> {
+) -> Result<parser::MergeSession, String> {
     let mut guard = state.lock().map_err(|e| format!("State lock error: {}", e))?;
 
     let session = guard.as_mut().ok_or("No active session")?;
 
-    let mut auto_resolved = 0usize;
-    let mut remaining = 0usize;
+    let mut _auto_resolved = 0usize;
+    let mut _remaining = 0usize;
 
     // Collect conflict IDs to modify (can't mutate while iterating)
     let conflict_ids: Vec<usize> = session
@@ -45,17 +45,14 @@ pub fn magic_merge(
         };
 
         if can_auto_resolve {
-            auto_resolved += 1;
+            _auto_resolved += 1;
         } else {
-            remaining += 1;
+            _remaining += 1;
         }
     }
 
     // Update counts after all changes
     session.recount();
 
-    Ok(parser::MagicMergeResult {
-        auto_resolved,
-        remaining,
-    })
+    Ok(session.clone())
 }
