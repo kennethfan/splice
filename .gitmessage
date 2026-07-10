@@ -1,10 +1,9 @@
-Step 4: Magic Merge dialog + Conflict Overview sidebar
+Step 5: Git mergetool integration (--local/--base/--remote/--result CLI)
 
-New components:
-  - MagicMergeDialog.tsx: modal showing resolved/remaining counts with undo
-  - ConflictOverview.tsx: sidebar grouping conflicts by status, click to jump
+New module:
+  - git/mergetool.rs: CLI argument parsing, env var helpers, 5 tests
+  - git/mod.rs: module exports
 
 Changes:
-  - App.tsx: integrated both components + magic result state + Cmd+P binding
-  - useKeyboard.ts: added onOpenOverview handler for Cmd+P
-  - splice.css: dialog overlay, stats cards, sidebar with slide animation
+  - main.rs: detects mergetool args, sets env vars, launches GUI
+  - lib.rs: auto-opens result file in mergetool mode via pre-loaded session
