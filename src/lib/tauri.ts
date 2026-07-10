@@ -50,25 +50,25 @@ export async function openFile(path: string): Promise<MergeSession> {
 }
 
 export async function resolveConflict(
-  sessionId: number,
-  conflictId: number,
+  _session_id: number,
+  conflict_id: number,
   action: ResolveAction
 ): Promise<MergeSession> {
   return invoke<MergeSession>("resolve_conflict", {
-    sessionId,
-    conflictId,
+    _session_id,
+    conflict_id,
     action,
   });
 }
 
 export async function magicMerge(
-  sessionId: number
+  _session_id: number
 ): Promise<MagicMergeResult> {
-  return invoke<MagicMergeResult>("magic_merge", { sessionId });
+  return invoke<MagicMergeResult>("magic_merge", { _session_id });
 }
 
-export async function saveFile(sessionId: number): Promise<void> {
-  return invoke<void>("save_file", { sessionId });
+export async function saveFile(): Promise<void> {
+  return invoke<void>("save_file");
 }
 
 export async function getBaseVersion(
