@@ -1,0 +1,15 @@
+Step 2: Tauri IPC commands implementation
+
+New modules:
+  - commands/open_file.rs: open file, parse conflicts, get BASE from git
+  - commands/resolve.rs: resolve single conflict by ID (Local/Remote/Both/Manual)
+  - commands/magic_merge.rs: auto-resolve non-conflicting changes
+  - commands/save.rs: build resolved content, write to file with .bak backup
+  - commands/get_base.rs: fetch BASE version via git2
+  - lib.rs: register all 5 commands + Mutex<Option<MergeSession>> state mgmt
+
+Improvements:
+  - save.rs uses lexer::detect_marker for robust conflict block replacement
+  - ConflictMarkers and fields made pub for cross-module reuse
+  - Unused session_id warnings fixed (_session_id prefix)
+  - All 15 parser tests still pass; cargo check clean

@@ -15,17 +15,16 @@ enum ParseState {
 
 /// Line-by-line result from the parser.
 #[derive(Debug)]
-struct ConflictMarkers {
+pub struct ConflictMarkers {
     /// The marker text at the start of the line
-    marker: String,
+    pub marker: String,
     /// Content after the marker (e.g., branch name)
-    #[allow(dead_code)]
-    label: String,
+    pub label: String,
 }
 
 /// Try to extract a conflict marker from a line.
 /// Returns None if the line is not a conflict marker.
-fn detect_marker(line: &str) -> Option<ConflictMarkers> {
+pub fn detect_marker(line: &str) -> Option<ConflictMarkers> {
     let trimmed = line.trim_end();
 
     if trimmed.starts_with("<<<<<<< ") {
