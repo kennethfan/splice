@@ -1,6 +1,10 @@
-Fix: Magic Merge now returns full MergeSession, not just result counts
+Step 4: Magic Merge dialog + Conflict Overview sidebar
 
-Rust magic_merge command now returns MergeSession instead of
-MagicMergeResult, so the frontend can use the resolved state
-directly without re-reading from disk. Frontend tauri.ts and
-App.tsx updated accordingly.
+New components:
+  - MagicMergeDialog.tsx: modal showing resolved/remaining counts with undo
+  - ConflictOverview.tsx: sidebar grouping conflicts by status, click to jump
+
+Changes:
+  - App.tsx: integrated both components + magic result state + Cmd+P binding
+  - useKeyboard.ts: added onOpenOverview handler for Cmd+P
+  - splice.css: dialog overlay, stats cards, sidebar with slide animation

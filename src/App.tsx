@@ -2,6 +2,8 @@ import { useState, useCallback, useRef } from "react";
 import "./styles/splice.css";
 import { ConflictBlock } from "./components/ConflictBlock";
 import { ConflictNav } from "./components/ConflictNav";
+import { MagicMergeDialog } from "./components/MagicMergeDialog";
+import { ConflictOverview } from "./components/ConflictOverview";
 import { useSyncScroll } from "./hooks/useSyncScroll";
 import { useKeyboard } from "./hooks/useKeyboard";
 import type { MergeSession, ResolveAction } from "./lib/tauri";
@@ -11,6 +13,12 @@ function App() {
   const [session, setSession] = useState<MergeSession | null>(null);
   const [activeConflictIndex, setActiveConflictIndex] = useState(0);
   const [showBase, setShowBase] = useState(false);
+  const [showOverview, setShowOverview] = useState(false);
+  const [magicResult, setMagicResult] = useState<{
+    autoResolved: number;
+    remaining: number;
+    filePath: string;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sessionIdRef = useRef(0);
@@ -82,19 +90,54 @@ function App() {
     if (!session) return;
     try {
       const updated = await magicMerge(sessionIdRef.current);
+      const beforeTotal = session.total_count;
+      const afterResolved = updated.resolved_count;
+      const autoResolved = afterResolved - session.resolved_count;
+      const remaining = beforeTotal - afterResolved;
       setSession(updated);
-      // Show result toast
-      const resolved = updated.resolved_count;
-      const remaining = updated.total_count - resolved;
-      setError(
-        remaining > 0
-          ? `✨ Auto-resolved ${resolved} conflicts, ${remaining} remaining`
-          : `✨ All ${resolved} conflicts resolved!`
-      );
-      setTimeout(() => setError(null), 3000);
+      // Show Magic Merge dialog
+      setMagicResult({
+        autoResolved,
+        remaining,
+        filePath: updated.file_path,
+      });
     } catch (err) {
       setError(String(err));
     }
+  }, [session]);
+
+  // Undo magic merge (re-open file)
+  const handleUndoMagic = useCallback(async () => {
+    if (!session) return;
+    setMagicResult(null);
+    try {
+      const fresh = await openFile(session.file_path);
+      setSession(fresh);
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [session]);
+
+  // Close magic result dialog
+  const handleCloseMagic = useCallback(() => {
+    setMagicResult(null);
+  }, []);
+
+  // Jump to a conflict by id (from overview sidebar)
+  const handleJumpToConflict = useCallback((conflictId: number) => {
+    if (!session) return;
+    const idx = session.conflicts.findIndex((c) => c.id === conflictId);
+    if (idx >= 0) {
+      // Find this conflict's position in the unresolved list
+      const unresolvedPos = session.conflicts
+        .map((c, i) => ({ c, i }))
+        .filter(({ c }) => c.status === "Unresolved")
+        .findIndex(({ i }) => i === idx);
+      if (unresolvedPos >= 0) {
+        setActiveConflictIndex(unresolvedPos);
+      }
+    }
+    setShowOverview(false);
   }, [session]);
 
   // Save
@@ -145,6 +188,10 @@ function App() {
     setShowBase((prev) => !prev);
   }, []);
 
+  const handleOpenOverview = useCallback(() => {
+    if (session) setShowOverview((prev) => !prev);
+  }, [session]);
+
   // Register keyboard shortcuts
   useKeyboard({
     onNextConflict: handleNextConflict,
@@ -158,6 +205,7 @@ function App() {
     onUndo: handleUndo,
     onRedo: handleRedo,
     onToggleBasePanel: handleToggleBase,
+    onOpenOverview: handleOpenOverview,
   });
 
   // Render file content lines with conflict highlighting
@@ -326,6 +374,26 @@ function App() {
           )}
         </div>
       </div>
+
+      {/* Magic Merge Dialog */}
+      {magicResult && (
+        <MagicMergeDialog
+          autoResolved={magicResult.autoResolved}
+          remaining={magicResult.remaining}
+          filePath={magicResult.filePath}
+          onUndo={handleUndoMagic}
+          onClose={handleCloseMagic}
+        />
+      )}
+
+      {/* Conflict Overview Sidebar */}
+      <ConflictOverview
+        conflicts={session?.conflicts ?? []}
+        activeConflictId={currentConflictId}
+        isOpen={showOverview}
+        onClose={() => setShowOverview(false)}
+        onJumpTo={handleJumpToConflict}
+      />
 
       {/* Error toast */}
       {error && (

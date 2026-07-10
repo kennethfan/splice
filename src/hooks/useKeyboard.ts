@@ -12,6 +12,7 @@ export interface KeyboardHandlers {
   onUndo: () => void;
   onRedo: () => void;
   onToggleBasePanel: () => void;
+  onOpenOverview: () => void;
 }
 
 /**
@@ -65,6 +66,10 @@ export function useKeyboard(handlers: KeyboardHandlers) {
           case "\\":
             e.preventDefault();
             handlers.onToggleBasePanel();
+            break;
+          case "p":
+            e.preventDefault();
+            handlers.onOpenOverview();
             break;
         }
       } else {
