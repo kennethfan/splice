@@ -1,9 +1,7 @@
-Step 5: Git mergetool integration (--local/--base/--remote/--result CLI)
-
-New module:
-  - git/mergetool.rs: CLI argument parsing, env var helpers, 5 tests
-  - git/mod.rs: module exports
+Install Tauri dialog plugin, native file open dialog, and test fixtures
 
 Changes:
-  - main.rs: detects mergetool args, sets env vars, launches GUI
-  - lib.rs: auto-opens result file in mergetool mode via pre-loaded session
+  - tauri-plugin-dialog added (Rust + npm + capability permissions)
+  - lib.rs: dialog plugin registered
+  - App.tsx: native file dialog replaces window.prompt via @tauri-apps/plugin-dialog
+  - test/fixtures/conflict-test.js: test file with 4 conflicts (incl. zdiff3)

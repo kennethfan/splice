@@ -6,8 +6,9 @@ import { MagicMergeDialog } from "./components/MagicMergeDialog";
 import { ConflictOverview } from "./components/ConflictOverview";
 import { useSyncScroll } from "./hooks/useSyncScroll";
 import { useKeyboard } from "./hooks/useKeyboard";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { MergeSession, ResolveAction } from "./lib/tauri";
-import { openFile, resolveConflict, magicMerge, saveFile } from "./lib/tauri";
+import { openFile as openFileViaTauri, resolveConflict, magicMerge, saveFile } from "./lib/tauri";
 
 function App() {
   const [session, setSession] = useState<MergeSession | null>(null);
@@ -41,19 +42,24 @@ function App() {
     ? session?.conflicts[unresolvedIndices[currentConflictIndex]]?.id ?? 0
     : 0;
 
-  // Open file dialog via Tauri
+  // Open file dialog via Tauri native dialog
   const handleOpenFile = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // For MVP, prompt the user for a file path
-      // In a real Tauri app, we'd use the dialog plugin
-      const path = window.prompt("Enter path to conflicted file:");
-      if (!path) {
+      const selected = await open({
+        multiple: false,
+        title: "Open Conflicted File",
+        filters: [{
+          name: "All Files",
+          extensions: ["*"],
+        }],
+      });
+      if (!selected) {
         setLoading(false);
         return;
       }
-      const result = await openFile(path);
+      const result = await openFileViaTauri(selected);
       sessionIdRef.current += 1;
       setSession(result);
       setActiveConflictIndex(0);
@@ -111,7 +117,7 @@ function App() {
     if (!session) return;
     setMagicResult(null);
     try {
-      const fresh = await openFile(session.file_path);
+      const fresh = await openFileViaTauri(session.file_path);
       setSession(fresh);
     } catch (err) {
       setError(String(err));

@@ -38,6 +38,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Mutex::new(initial_session))
         .invoke_handler(tauri::generate_handler![
             commands::open_file::open_file,
