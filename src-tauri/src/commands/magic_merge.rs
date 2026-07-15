@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::parser;
@@ -6,32 +7,36 @@ use crate::parser;
 /// Returns the full updated MergeSession so the frontend can use it directly.
 #[tauri::command]
 pub fn magic_merge(
-    _session_id: usize,
-    state: tauri::State<'_, Mutex<Option<parser::MergeSession>>>,
+    file_path: String,
+    state: tauri::State<'_, Mutex<HashMap<String, parser::MergeSession>>>,
 ) -> Result<parser::MergeSession, String> {
     let mut guard = state.lock().map_err(|e| format!("State lock error: {}", e))?;
 
-    let session = guard.as_mut().ok_or("No active session")?;
+    let session = guard
+        .get_mut(&file_path)
+        .ok_or_else(|| format!("Session not found for file: {}", file_path))?;
 
-    let mut _auto_resolved = 0usize;
+    let mut auto_resolved = 0usize;
     let mut _remaining = 0usize;
 
-    // Collect conflict IDs to modify (can't mutate while iterating)
-    let conflict_ids: Vec<usize> = session
-        .conflicts
-        .iter()
-        .filter(|c| !c.is_resolved())
-        .map(|c| c.id)
-        .collect();
+    // Collect conflict IDs and their current statuses (for undo)
+    let mut undo_statuses: Vec<(usize, parser::ConflictStatus)> = Vec::new();
+    let mut conflict_ids: Vec<usize> = Vec::new();
 
-    for id in conflict_ids {
+    for conflict in &session.conflicts {
+        if !conflict.is_resolved() {
+            undo_statuses.push((conflict.id, conflict.status.clone()));
+            conflict_ids.push(conflict.id);
+        }
+    }
+
+    for id in &conflict_ids {
         let conflict = session
-            .conflict_mut(id)
+            .conflict_mut(*id)
             .ok_or_else(|| format!("Conflict {} disappeared", id))?;
 
         // Determine if this can be auto-resolved
         let can_auto_resolve = match (&conflict.base_lines, &conflict.local_lines, &conflict.remote_lines) {
-            // Has BASE, and only one side changed
             (Some(base), local, remote) if local != base && remote == base => {
                 conflict.status = parser::ConflictStatus::ResolvedWithLocal;
                 true
@@ -40,15 +45,20 @@ pub fn magic_merge(
                 conflict.status = parser::ConflictStatus::ResolvedWithRemote;
                 true
             }
-            // Both sides changed, or no BASE available - needs manual resolution
             _ => false,
         };
 
         if can_auto_resolve {
-            _auto_resolved += 1;
-        } else {
-            _remaining += 1;
+            auto_resolved += 1;
         }
+    }
+
+    // Only push undo if something actually changed
+    if auto_resolved > 0 {
+        session.push_undo(parser::UndoEntry {
+            description: format!("Magic merge ({} auto-resolved)", auto_resolved),
+            statuses: undo_statuses,
+        });
     }
 
     // Update counts after all changes

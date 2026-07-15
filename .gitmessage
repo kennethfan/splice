@@ -1,7 +1,0 @@
-Install Tauri dialog plugin, native file open dialog, and test fixtures
-
-Changes:
-  - tauri-plugin-dialog added (Rust + npm + capability permissions)
-  - lib.rs: dialog plugin registered
-  - App.tsx: native file dialog replaces window.prompt via @tauri-apps/plugin-dialog
-  - test/fixtures/conflict-test.js: test file with 4 conflicts (incl. zdiff3)

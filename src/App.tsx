@@ -1,17 +1,51 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import "./styles/splice.css";
 import { ConflictBlock } from "./components/ConflictBlock";
-import { ConflictNav } from "./components/ConflictNav";
+import { StatusBar } from "./components/StatusBar";
 import { MagicMergeDialog } from "./components/MagicMergeDialog";
 import { ConflictOverview } from "./components/ConflictOverview";
+import { BasePane } from "./components/BasePane";
+import { TabBar } from "./components/TabBar";
+import { WatchedRepoPanel } from "./components/WatchedRepoPanel";
+import { ShortcutsOverlay } from "./components/ShortcutsOverlay";
 import { useSyncScroll } from "./hooks/useSyncScroll";
 import { useKeyboard } from "./hooks/useKeyboard";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { MergeSession, ResolveAction } from "./lib/tauri";
-import { openFile as openFileViaTauri, resolveConflict, magicMerge, saveFile } from "./lib/tauri";
+import {
+  openFile as openFileViaTauri,
+  resolveConflict,
+  magicMerge,
+  saveFile,
+  closeSession,
+  undo as undoViaTauri,
+  redo as redoViaTauri,
+  configureMergetool,
+  installConflictHook,
+  uninstallConflictHook,
+  getConflictHookStatus,
+  startWatcher,
+  stopWatcher,
+  addWatchedRepo,
+  removeWatchedRepo,
+  getWatcherStatus,
+  getWatchedRepoDetails,
+  getInitialSession,
+} from "./lib/tauri";
+import { listen } from "@tauri-apps/api/event";
+import type { ConflictDetectedPayload, WatchedRepoDetail } from "./lib/tauri";
+import { highlightLines } from "./lib/highlight";
+import { playConflictChime } from "./lib/sound";
+import { useBlockDiffs } from "./hooks/useBlockDiffs";
+
+interface TabData {
+  filePath: string;
+  session: MergeSession;
+}
 
 function App() {
-  const [session, setSession] = useState<MergeSession | null>(null);
+  const [tabs, setTabs] = useState<TabData[]>([]);
+  const [activeTabIndex, setActiveTabIndex] = useState(0);
   const [activeConflictIndex, setActiveConflictIndex] = useState(0);
   const [showBase, setShowBase] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
@@ -22,9 +56,68 @@ function App() {
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const sessionIdRef = useRef(0);
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false);
+  const [watcherRunning, setWatcherRunning] = useState(false);
+  const [watchedRepoCount, setWatchedRepoCount] = useState(0);
+  const [showWatcherPanel, setShowWatcherPanel] = useState(false);
+  const [watchedRepoDetails, setWatchedRepoDetails] = useState<WatchedRepoDetail[]>([]);
+  const [panelRefreshKey, setPanelRefreshKey] = useState(0);
+  const [highlightedFiles, setHighlightedFiles] = useState<Record<string, Set<string>>>({});
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
+  const [isMergetoolMode, setIsMergetoolMode] = useState(false);
 
-  const { refs, handleScroll } = useSyncScroll();
+  // Ref to avoid stale activeTabIndex in async callbacks
+  const activeTabIndexRef = useRef(activeTabIndex);
+  activeTabIndexRef.current = activeTabIndex;
+  // Ref to prevent double-loading in React StrictMode
+  const initialSessionLoadedRef = useRef(false);
+
+  // Active tab / session helpers
+  const activeTab = tabs[activeTabIndex] ?? null;
+  const session = activeTab?.session ?? null;
+  const activeFilePath = activeTab?.filePath ?? "";
+
+  const debugInfo = session ? {
+    localLen: session.all_local_content?.length ?? 0,
+    remoteLen: session.all_remote_content?.length ?? 0,
+    baseLen: session.all_base_content?.length ?? 0,
+    originalLen: session.original_content?.length ?? 0,
+    conflictCount: session.conflicts?.length ?? 0,
+  } : null;
+
+  const { refs, handleScroll, programmaticScrollRef } = useSyncScroll();
+
+  // Memoized syntax-highlighted lines for each pane
+  const highlightedLocal = useMemo(
+    () =>
+      session
+        ? highlightLines(session.all_local_content, session.file_extension)
+        : [],
+    [session?.all_local_content, session?.file_extension]
+  );
+
+  const highlightedRemote = useMemo(
+    () =>
+      session
+        ? highlightLines(session.all_remote_content, session.file_extension)
+        : [],
+    [session?.all_remote_content, session?.file_extension]
+  );
+
+  const highlightedBase = useMemo(
+    () =>
+      session?.all_base_content
+        ? highlightLines(session.all_base_content, session.file_extension)
+        : [],
+    [session?.all_base_content, session?.file_extension]
+  );
+
+  // Fetch word-level diffs for the active session
+  const { diffs, getDiffForBlock } = useBlockDiffs(
+    activeFilePath,
+    session?.conflicts.length ?? 0,
+  );
 
   // Filter to unresolved conflicts for navigation
   const unresolvedIndices = session
@@ -42,6 +135,54 @@ function App() {
     ? session?.conflicts[unresolvedIndices[currentConflictIndex]]?.id ?? 0
     : 0;
 
+  // Helper to update the active session in the tabs array using ref'd index
+  const updateActiveSession = useCallback(
+    (updated: MergeSession) => {
+      const idx = activeTabIndexRef.current;
+      setTabs((prev) => {
+        const next = [...prev];
+        if (next[idx]) {
+          next[idx] = { ...next[idx], session: updated };
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  // Switch to a specific tab
+  const handleSelectTab = useCallback((index: number) => {
+    setActiveTabIndex(index);
+    setActiveConflictIndex(0);
+    setShowOverview(false);
+  }, []);
+
+  // Close a tab and clean up backend session
+  const handleCloseTab = useCallback(
+    async (index: number) => {
+      const tab = tabs[index];
+      if (!tab) return;
+
+      try {
+        await closeSession(tab.filePath);
+      } catch {
+        // Ignore close errors
+      }
+
+      // Compute new tabs array
+      const newTabs = tabs.filter((_, i) => i !== index);
+      setTabs(newTabs);
+
+      // Adjust active tab index
+      if (newTabs.length === 0) {
+        setActiveTabIndex(0);
+      } else if (index <= activeTabIndex) {
+        setActiveTabIndex((prev) => Math.max(0, prev - 1));
+      }
+    },
+    [tabs, activeTabIndex]
+  );
+
   // Open file dialog via Tauri native dialog
   const handleOpenFile = useCallback(async () => {
     setLoading(true);
@@ -50,58 +191,96 @@ function App() {
       const selected = await open({
         multiple: false,
         title: "Open Conflicted File",
-        filters: [{
-          name: "All Files",
-          extensions: ["*"],
-        }],
+        filters: [
+          {
+            name: "All Files",
+            extensions: ["*"],
+          },
+        ],
       });
       if (!selected) {
         setLoading(false);
         return;
       }
+
+      // Check if this file is already open
+      const existing = tabs.findIndex((t) => t.filePath === selected);
+      if (existing >= 0) {
+        setActiveTabIndex(existing);
+        setActiveConflictIndex(0);
+        setLoading(false);
+        return;
+      }
+
       const result = await openFileViaTauri(selected);
-      sessionIdRef.current += 1;
-      setSession(result);
+      setTabs((prev) => [...prev, { filePath: selected, session: result }]);
+      setActiveTabIndex(tabs.length);
       setActiveConflictIndex(0);
+      // Auto-add the file's repo to the conflict watcher
+      if (watcherRunning) {
+        try {
+          let dir = selected.substring(0, selected.lastIndexOf("/"));
+          let found = false;
+          while (dir.length > 0 && !found) {
+            try {
+              const repoStatus = await addWatchedRepo(dir);
+              setWatchedRepoCount(repoStatus.watched_repos.length);
+              found = true;
+            } catch {
+              const nextSep = dir.lastIndexOf("/");
+              if (nextSep <= 0) break;
+              dir = dir.substring(0, nextSep);
+            }
+          }
+        } catch {
+          // Failed to find a repo root — silently ignore
+        }
+      }
     } catch (err) {
       setError(String(err));
     }
     setLoading(false);
-  }, []);
+  }, [tabs]);
 
   // Resolve a conflict
-  const handleResolve = useCallback(async (conflictId: number, action: ResolveAction) => {
-    if (!session) return;
-    try {
-      const updated = await resolveConflict(sessionIdRef.current, conflictId, action);
-      setSession(updated);
-    } catch (err) {
-      setError(String(err));
-    }
-  }, [session]);
+  const handleResolve = useCallback(
+    async (conflictId: number, action: ResolveAction) => {
+      if (!session) return;
+      try {
+        const updated = await resolveConflict(activeFilePath, conflictId, action);
+        updateActiveSession(updated);
+      } catch (err) {
+        setError(String(err));
+      }
+    },
+    [session, activeFilePath, updateActiveSession]
+  );
 
-  // Navigate to next conflict
+  // Navigate to next conflict — also increments scroll counter to ensure
+  // the scroll effect fires even when index stays the same (single conflict)
   const handleNextConflict = useCallback(() => {
-    if (unresolvedIndices.length <= 1) return;
+    if (unresolvedIndices.length <= 0) return;
     setActiveConflictIndex((prev) => Math.min(prev + 1, unresolvedIndices.length - 1));
+    setScrollCounter((c) => c + 1);
   }, [unresolvedIndices.length]);
 
   // Navigate to previous conflict
   const handlePrevConflict = useCallback(() => {
+    if (unresolvedIndices.length <= 0) return;
     setActiveConflictIndex((prev) => Math.max(prev - 1, 0));
-  }, []);
+    setScrollCounter((c) => c + 1);
+  }, [unresolvedIndices.length]);
 
   // Magic merge
   const handleMagicMerge = useCallback(async () => {
     if (!session) return;
     try {
-      const updated = await magicMerge(sessionIdRef.current);
+      const updated = await magicMerge(activeFilePath);
       const beforeTotal = session.total_count;
       const afterResolved = updated.resolved_count;
       const autoResolved = afterResolved - session.resolved_count;
       const remaining = beforeTotal - afterResolved;
-      setSession(updated);
-      // Show Magic Merge dialog
+      updateActiveSession(updated);
       setMagicResult({
         autoResolved,
         remaining,
@@ -110,7 +289,7 @@ function App() {
     } catch (err) {
       setError(String(err));
     }
-  }, [session]);
+  }, [session, activeFilePath, updateActiveSession]);
 
   // Undo magic merge (re-open file)
   const handleUndoMagic = useCallback(async () => {
@@ -118,11 +297,11 @@ function App() {
     setMagicResult(null);
     try {
       const fresh = await openFileViaTauri(session.file_path);
-      setSession(fresh);
+      updateActiveSession(fresh);
     } catch (err) {
       setError(String(err));
     }
-  }, [session]);
+  }, [session, updateActiveSession]);
 
   // Close magic result dialog
   const handleCloseMagic = useCallback(() => {
@@ -130,32 +309,34 @@ function App() {
   }, []);
 
   // Jump to a conflict by id (from overview sidebar)
-  const handleJumpToConflict = useCallback((conflictId: number) => {
-    if (!session) return;
-    const idx = session.conflicts.findIndex((c) => c.id === conflictId);
-    if (idx >= 0) {
-      // Find this conflict's position in the unresolved list
-      const unresolvedPos = session.conflicts
-        .map((c, i) => ({ c, i }))
-        .filter(({ c }) => c.status === "Unresolved")
-        .findIndex(({ i }) => i === idx);
-      if (unresolvedPos >= 0) {
-        setActiveConflictIndex(unresolvedPos);
+  const handleJumpToConflict = useCallback(
+    (conflictId: number) => {
+      if (!session) return;
+      const idx = session.conflicts.findIndex((c) => c.id === conflictId);
+      if (idx >= 0) {
+        const unresolvedPos = session.conflicts
+          .map((c, i) => ({ c, i }))
+          .filter(({ c }) => c.status === "Unresolved")
+          .findIndex(({ i }) => i === idx);
+        if (unresolvedPos >= 0) {
+          setActiveConflictIndex(unresolvedPos);
+        }
       }
-    }
-    setShowOverview(false);
-  }, [session]);
+      setShowOverview(false);
+    },
+    [session]
+  );
 
   // Save
   const handleSave = useCallback(async () => {
     if (!session) return;
     try {
-      await saveFile();
-      setSession((prev) => (prev ? { ...prev, saved: true } : null));
+      await saveFile(activeFilePath);
+      updateActiveSession({ ...session, saved: true });
     } catch (err) {
       setError(String(err));
     }
-  }, [session]);
+  }, [session, activeFilePath, updateActiveSession]);
 
   // Accept local/remote/both for current conflict
   const handleAcceptLocal = useCallback(async () => {
@@ -179,24 +360,339 @@ function App() {
     }
   }, [currentConflictId, handleResolve, handleNextConflict]);
 
-  const handleUndo = useCallback(() => {
-    // Not yet implemented on the backend side
-    setError("Undo is not yet implemented");
-    setTimeout(() => setError(null), 2000);
-  }, []);
+  const handleUndo = useCallback(async () => {
+    if (!session) return;
+    try {
+      const updated = await undoViaTauri(activeFilePath);
+      updateActiveSession(updated);
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("Nothing to undo")) {
+        // Silently ignore — nothing to undo
+      } else {
+        setError(msg);
+      }
+    }
+  }, [session, activeFilePath, updateActiveSession]);
 
-  const handleRedo = useCallback(() => {
-    setError("Redo is not yet implemented");
-    setTimeout(() => setError(null), 2000);
-  }, []);
+  const handleRedo = useCallback(async () => {
+    if (!session) return;
+    try {
+      const updated = await redoViaTauri(activeFilePath);
+      updateActiveSession(updated);
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("Nothing to redo")) {
+        // Silently ignore
+      } else {
+        setError(msg);
+      }
+    }
+  }, [session, activeFilePath, updateActiveSession]);
 
   const handleToggleBase = useCallback(() => {
+    if (!session) return;
     setShowBase((prev) => !prev);
-  }, []);
+  }, [session]);
 
   const handleOpenOverview = useCallback(() => {
     if (session) setShowOverview((prev) => !prev);
   }, [session]);
+
+  const handleToggleDebug = useCallback(() => {
+    setShowDebug((prev) => !prev);
+  }, []);
+
+  // Configure git mergetool
+  const handleConfigureMergetool = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const cmd = await configureMergetool();
+      setError(`✅ Git mergetool configured! Cmd: ${cmd}`);
+      // Auto-dismiss success after 5 seconds
+      setTimeout(() => setError(null), 5000);
+    } catch (err) {
+      setError(`⚠️ ${err}`);
+    }
+    setLoading(false);
+  }, []);
+
+  // Auto-start toggle: install/uninstall conflict hooks
+  const handleToggleAutoStart = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (autoStartEnabled) {
+        await uninstallConflictHook();
+        setAutoStartEnabled(false);
+        setError("🛑 Conflict auto-launch disabled");
+      } else {
+        const hooksPath = await installConflictHook();
+        setAutoStartEnabled(true);
+        setError(`✅ Auto-launch enabled! Hooks installed at ${hooksPath}`);
+      }
+      setTimeout(() => setError(null), 5000);
+    } catch (err) {
+      setError(`⚠️ ${err}`);
+    }
+    setLoading(false);
+  }, [autoStartEnabled]);
+
+  // Watcher: open folder picker to add a repo to the watch list
+  const handleAddWatchedRepo = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Open native directory picker
+      const selected = await open({
+        multiple: false,
+        directory: true,
+        title: "Select Git Repository to Watch",
+      });
+      if (!selected) {
+        setLoading(false);
+        return;
+      }
+
+      // If watcher isn't running, start it first
+      if (!watcherRunning) {
+        const status = await startWatcher();
+        setWatcherRunning(true);
+        setWatchedRepoCount(status.watched_repos.length);
+      }
+
+      // Add the selected repo
+      const status = await addWatchedRepo(selected);
+      setWatchedRepoCount(status.watched_repos.length);
+      const repoName = selected.split("/").pop() || selected;
+      setError(`✅ Watching ${repoName} (${status.watched_repos.length} repo(s) tracked)`);
+      setTimeout(() => setError(null), 5000);
+    } catch (err) {
+      setError(`⚠️ ${err}`);
+    }
+    setLoading(false);
+  }, [watcherRunning]);
+
+  // Watcher: open the manage panel
+  const handleOpenWatcherPanel = useCallback(async () => {
+    setShowWatcherPanel(true);
+    // Fetch fresh repo details
+    try {
+      const details = await getWatchedRepoDetails();
+      setWatchedRepoDetails(details.repos);
+      setWatchedRepoCount(details.repos.length);
+    } catch {
+      // Silently ignore
+    }
+  }, []);
+
+  // Watcher: close the manage panel
+  const handleCloseWatcherPanel = useCallback(() => {
+    setShowWatcherPanel(false);
+  }, []);
+
+  // Watcher: remove a specific repo
+  const handleRemoveRepoFromWatcher = useCallback(async (path: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const status = await removeWatchedRepo(path);
+      setWatchedRepoCount(status.watched_repos.length);
+      // Refresh the details list
+      const details = await getWatchedRepoDetails();
+      setWatchedRepoDetails(details.repos);
+    } catch (err) {
+      setError(`⚠️ ${err}`);
+    }
+    setLoading(false);
+  }, []);
+
+  // Watcher: open a conflicted file directly from the panel
+  const handleOpenConflictedFile = useCallback(async (filePath: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Check if already open
+      const existing = tabs.findIndex((t) => t.filePath === filePath);
+      if (existing >= 0) {
+        setActiveTabIndex(existing);
+        setActiveConflictIndex(0);
+        setShowWatcherPanel(false);
+        setLoading(false);
+        return;
+      }
+
+      const result = await openFileViaTauri(filePath);
+      setTabs((prev) => [...prev, { filePath, session: result }]);
+      setActiveTabIndex(tabs.length);
+      setActiveConflictIndex(0);
+      setShowWatcherPanel(false);
+    } catch (err) {
+      setError(`⚠️ ${err}`);
+    }
+    setLoading(false);
+  }, [tabs]);
+
+  // Watcher: stop the daemon
+  const handleStopWatcher = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const status = await stopWatcher();
+      setWatcherRunning(false);
+      setWatchedRepoCount(status.watched_repos.length);
+      setError("⏸ Conflict watcher stopped");
+      setTimeout(() => setError(null), 5000);
+    } catch (err) {
+      setError(`⚠️ ${err}`);
+    }
+    setLoading(false);
+  }, []);
+
+  // Check initial hook + watcher status on mount
+  useEffect(() => {
+    getConflictHookStatus()
+      .then((status) => setAutoStartEnabled(status.installed))
+      .catch(() => {});
+
+    getWatcherStatus()
+      .then((s) => {
+        setWatcherRunning(s.running);
+        setWatchedRepoCount(s.watched_repos.length);
+      })
+      .catch(() => {});
+
+    // Auto-open session from mergetool mode (git mergetool triggered launch)
+    getInitialSession()
+      .then((session) => {
+        if (session && !initialSessionLoadedRef.current) {
+          initialSessionLoadedRef.current = true;
+          setIsMergetoolMode(true);
+          const path = session.file_path;
+          setTabs((prev) => [...prev, { filePath: path, session }]);
+          setActiveTabIndex(0);
+          setActiveConflictIndex(0);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Listen for conflict-detected events from the backend watcher
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<ConflictDetectedPayload>("conflict-detected", (event) => {
+      const repoName = event.payload.repo_root.split("/").pop() || "repo";
+      setError(`🚨 ${event.payload.conflict_count} conflict(s) in ${repoName}!`);
+      // Auto-dismiss after 8 seconds
+      setTimeout(() => setError(null), 8000);
+      // Play a subtle notification chime
+      playConflictChime();
+      // Trigger auto-refresh of the watched repos panel
+      setPanelRefreshKey((prev) => prev + 1);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  // Listen for conflicts-resolved events
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ repo_root: string }>("conflicts-resolved", (event) => {
+      const repoName = event.payload.repo_root.split("/").pop() || "repo";
+      setError(`✅ Conflicts resolved in ${repoName}`);
+      setTimeout(() => setError(null), 5000);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  // Close active tab shortcut (Cmd+W)
+  const handleCloseActiveTab = useCallback(() => {
+    if (tabs.length > 0) {
+      handleCloseTab(activeTabIndex);
+    }
+  }, [tabs.length, activeTabIndex, handleCloseTab]);
+
+  // Counter to force scroll effect even when currentConflictId doesn't change
+  const [scrollCounter, setScrollCounter] = useState(0);
+
+  // Auto-scroll to the active conflict block in the result pane.
+  // Uses programmaticScrollRef to prevent cascading feedback loops
+  // with the pane scroll-sync mechanism.
+  useEffect(() => {
+    if (currentConflictIndex < 0 || currentConflictId <= 0) return;
+    const pane = refs.center.current;
+    if (!pane) return;
+    const frameId = requestAnimationFrame(() => {
+      const el = pane.querySelector(`[data-conflict-id="${currentConflictId}"]`);
+      if (el) {
+        // Mark as programmatic before changing scroll, so handleScroll
+        // doesn't cascade back.
+        programmaticScrollRef.current = true;
+        // Use "auto" instead of "smooth" to avoid trailing scroll events
+        // during the animation that would trigger cascading syncs.
+        el.scrollIntoView({ behavior: "auto", block: "center" });
+        // Clear guard after one frame to allow user-initiated scroll events
+        requestAnimationFrame(() => {
+          programmaticScrollRef.current = false;
+        });
+      }
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [currentConflictIndex, currentConflictId, scrollCounter, refs.center, programmaticScrollRef]);
+
+  // Auto-clear file highlight flashes after the animation finishes (1.5s)
+  // Lives in App.tsx so the state persists across panel open/close
+  useEffect(() => {
+    const repos = Object.keys(highlightedFiles);
+    if (repos.length === 0) return;
+    const timer = setTimeout(() => setHighlightedFiles({}), 1500);
+    return () => clearTimeout(timer);
+  }, [highlightedFiles]);
+
+  // Toggle shortcuts help overlay (Cmd+/ or ? without modifiers)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in an input
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable)
+      ) {
+        return;
+      }
+
+      // Cmd+/ or Ctrl+/
+      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
+        e.preventDefault();
+        setShowShortcuts((prev) => !prev);
+        return;
+      }
+
+      // ? (unmodified) — toggle
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key === "?") {
+        e.preventDefault();
+        setShowShortcuts((prev) => !prev);
+        return;
+      }
+
+      // Escape — close if open
+      if (e.key === "Escape" && showShortcuts) {
+        e.preventDefault();
+        setShowShortcuts(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showShortcuts]);
 
   // Register keyboard shortcuts
   useKeyboard({
@@ -212,38 +708,89 @@ function App() {
     onRedo: handleRedo,
     onToggleBasePanel: handleToggleBase,
     onOpenOverview: handleOpenOverview,
+    onCloseTab: handleCloseActiveTab,
+    onToggleDebug: handleToggleDebug,
   });
 
-  // Render file content lines with conflict highlighting
-  const renderContent = (content: string) => {
+  /**
+   * Build two Sets of indices — one for all_local_content and one for
+   * all_remote_content — that mark which lines belong to conflict blocks.
+   * Used to apply correct conflict highlighting in the side panels.
+   *
+   * The algorithm walks through original_content (with conflict markers):
+   * - Non-conflict lines appear 1:1 in both local_content and remote_content
+   * - Conflict start markers map to local_lines / remote_lines respectively
+   * - Marker / separator lines are skipped (not in either extracted content)
+   */
+  const computeConflictIndices = useMemo(() => {
+    if (!session) return { local: new Set<number>(), remote: new Set<number>() };
+    const sorted = [...session.conflicts].sort((a, b) => a.start_line - b.start_line);
+    const originalLines = session.original_content.split("\n");
+    const localIndices = new Set<number>();
+    const remoteIndices = new Set<number>();
+    let conflictIdx = 0;
+    let localIdx = 0;
+    let remoteIdx = 0;
+
+    for (let i = 0; i < originalLines.length; i++) {
+      const lineNum = i + 1;
+      const nextConflict = sorted[conflictIdx];
+
+      if (nextConflict && lineNum === nextConflict.start_line) {
+        // Mark local lines
+        for (let j = 0; j < nextConflict.local_lines.length; j++) {
+          localIndices.add(localIdx + j);
+        }
+        localIdx += nextConflict.local_lines.length;
+
+        // Mark remote lines
+        for (let j = 0; j < nextConflict.remote_lines.length; j++) {
+          remoteIndices.add(remoteIdx + j);
+        }
+        remoteIdx += nextConflict.remote_lines.length;
+
+        conflictIdx += 1;
+        i = nextConflict.end_line; // skip to end of conflict
+        continue;
+      }
+
+      // Check if this original line is inside any conflict range
+      if (sorted.some((c) => lineNum >= c.start_line && lineNum <= c.end_line)) {
+        continue; // skip marker/remote/base content
+      }
+
+      // Normal line (appears in both original and all_local/remote_content)
+      localIdx += 1;
+      remoteIdx += 1;
+    }
+
+    return { local: localIndices, remote: remoteIndices };
+  }, [session?.original_content, session?.conflicts]);
+
+  // Render side pane (LOCAL or REMOTE) with conflict highlighting
+  const renderSidePane = (content: string, highlightedLines: string[], conflictIndices: Set<number>) => {
     if (!session) return null;
 
     const lines = content.split("\n");
     return (
       <div className="pane-lines">
-        {lines.map((line, i) => {
-          const lineNum = i + 1;
-          // Check if this line falls within any conflict block
-          const inConflict = session.conflicts.find(
-            (c) => lineNum >= c.start_line && lineNum <= c.end_line
-          );
-          const isActive = inConflict && inConflict.id === currentConflictId;
-
+        {lines.map((_line, i) => {
+          const inConflict = conflictIndices.has(i);
           let lineClass = "pane-line";
           if (inConflict) {
-            if (inConflict.status !== "Unresolved") {
-              lineClass += " pane-line--resolved";
-            } else if (isActive) {
-              lineClass += " pane-line--conflict-active";
-            } else {
-              lineClass += " pane-line--conflict";
-            }
+            lineClass += " pane-line--conflict";
           }
 
+          const highlightedHtml = highlightedLines[i] ?? "";
           return (
             <div key={i} className={lineClass}>
-              <span className="line-number">{lineNum}</span>
-              <span className="line-text">{line || " "}</span>
+              <span className="line-number">{i + 1}</span>
+              <span
+                className="line-text"
+                dangerouslySetInnerHTML={{
+                  __html: highlightedHtml || " ",
+                }}
+              />
             </div>
           );
         })}
@@ -251,24 +798,33 @@ function App() {
     );
   };
 
-  // Render result content (with interactive conflict blocks)
+  // Render result content
   const renderResultContent = () => {
     if (!session) return null;
 
-    const lines = session.all_local_content.split("\n");
+    const originalLines = session.original_content.split("\n");
     const result: React.ReactNode[] = [];
 
-    // Walk through lines, inserting conflict blocks at the right positions
     const sortedConflicts = [...session.conflicts].sort((a, b) => a.start_line - b.start_line);
     let conflictIdx = 0;
+    let highlightedIdx = 0; // index into highlightedLocal for normal line syntax highlighting
 
-    for (let i = 0; i < lines.length; i++) {
+    // Build a Set of original line numbers that belong to any conflict
+    const conflictRanges = new Set<number>();
+    for (const c of sortedConflicts) {
+      for (let ln = c.start_line; ln <= c.end_line; ln++) {
+        conflictRanges.add(ln);
+      }
+    }
+
+    let i = 0;
+    while (i < originalLines.length) {
       const lineNum = i + 1;
       const nextConflict = sortedConflicts[conflictIdx];
 
       if (nextConflict && lineNum === nextConflict.start_line) {
-        // Insert the conflict block widget instead of the raw conflict markers
         const globalIndex = session.conflicts.findIndex((c) => c.id === nextConflict.id);
+        const blockIndex = session.conflicts.findIndex((c) => c.id === nextConflict.id);
         result.push(
           <ConflictBlock
             key={`conflict-${nextConflict.id}`}
@@ -277,21 +833,39 @@ function App() {
             index={globalIndex + 1}
             total={session.conflicts.length}
             onResolve={handleResolve}
+            blockDiff={getDiffForBlock(blockIndex)}
           />
         );
         conflictIdx += 1;
-
-        // Skip directly to the line after the conflict block
-        i = nextConflict.end_line - 1;
-      } else {
-        // Regular line
-        result.push(
-          <div key={`line-${i}`} className="pane-line pane-line--normal">
-            <span className="line-number">{lineNum}</span>
-            <span className="line-text">{lines[i] || " "}</span>
-          </div>
-        );
+        // Skip this conflict's LOCAL lines from all_local_content
+        // (they are not rendered as normal lines)
+        highlightedIdx += nextConflict.local_lines.length;
+        // Jump to the line AFTER the conflict's >>>>>>> marker
+        i = nextConflict.end_line;
+        continue;
       }
+
+      // Skip lines that are inside any conflict (markers, base, remote content)
+      if (conflictRanges.has(lineNum)) {
+        i++;
+        continue;
+      }
+
+      // Normal line (outside all conflicts) — render with syntax highlighting
+      const highlightedHtml = highlightedLocal[highlightedIdx] ?? "";
+      result.push(
+        <div key={`line-${highlightedIdx}`} className="pane-line pane-line--normal">
+          <span className="line-number">{highlightedIdx + 1}</span>
+          <span
+            className="line-text"
+            dangerouslySetInnerHTML={{
+              __html: highlightedHtml || " ",
+            }}
+          />
+        </div>
+      );
+      highlightedIdx++;
+      i++;
     }
 
     return <div className="pane-lines">{result}</div>;
@@ -313,12 +887,74 @@ function App() {
         )}
         <div className="title-bar-spacer" />
         <span className="title-bar-status">
-          {loading ? "● loading" : session ? "● ready" : "● idle"}
+          {loading
+            ? "● loading"
+            : session
+              ? `● ${tabs.length} file${tabs.length > 1 ? "s" : ""}`
+              : "● idle"}
+          {showBase && <span className="title-bar-base-badge">BASE</span>}
         </span>
       </div>
 
-      {/* Three-Pane Area */}
-      <div className={`panes ${showBase ? "panes--with-base" : ""}`}>
+      {/* Content area: TabBar + debug banner + panes stack vertically */}
+      <div className="pane-content-area">
+        {/* Tab Bar */}
+        {tabs.length > 0 && (
+          <TabBar
+            tabs={tabs.map((t) => ({ filePath: t.filePath }))}
+            activeIndex={activeTabIndex}
+            onSelect={handleSelectTab}
+            onClose={handleCloseTab}
+            onNewTab={handleOpenFile}
+          />
+        )}
+
+        {/* Debug banner — shows session debug info (Cmd+Shift+D to toggle) */}
+        {showDebug && session && debugInfo && (
+          <div style={{
+            background: "#1a1a2e",
+            borderBottom: "2px solid #ff6b6b",
+            color: "#e6edf3",
+            padding: "8px 16px",
+            fontFamily: "monospace",
+            fontSize: "12px",
+            lineHeight: "1.6",
+            display: "flex",
+            flexDirection: "column" as const,
+            gap: "4px",
+          }}>
+            <div style={{display: "flex", alignItems: "center", gap: "12px"}}>
+              <strong style={{color: "#ff6b6b"}}>🔍 Session Debug</strong>
+              <span style={{color: "#8b949e", fontSize: "11px"}}>
+                {session?.file_path?.split("/")?.pop()}
+              </span>
+              <span style={{marginLeft: "auto", fontSize: "10px", color: "#484F58"}}>
+                Cmd+Shift+D to hide
+              </span>
+              <button
+                onClick={() => setShowDebug(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#8b949e",
+                  cursor: "pointer",
+                  fontSize: "16px",
+                  padding: "0 4px",
+                  lineHeight: "1",
+                }}
+                title="Close debug panel"
+              >
+                ×
+              </button>
+            </div>
+            <pre style={{margin: 0, whiteSpace: "pre-wrap", fontSize: "11px", color: "#e6edf3"}}>
+              {JSON.stringify(debugInfo, null, 2)}
+            </pre>
+          </div>
+        )}
+
+        {/* Three-Pane Area */}
+        <div className={`panes ${showBase ? "panes--with-base" : ""}`}>
         {/* LOCAL */}
         <div
           className="pane pane-side"
@@ -327,12 +963,13 @@ function App() {
         >
           <div className="pane-header">Local (Yours)</div>
           {session ? (
-            renderContent(session.all_local_content)
+            renderSidePane(session.all_local_content, highlightedLocal, computeConflictIndices.local)
           ) : (
             <div className="pane-content pane-placeholder">
               <div className="placeholder-icon">📂</div>
               <div className="placeholder-text">
-                Drop a conflicted file here<br />
+                Drop a conflicted file here
+                <br />
                 or run <code>git mergetool</code>
               </div>
             </div>
@@ -356,6 +993,13 @@ function App() {
               <div className="placeholder-hint">
                 <code>Cmd + O</code> to open a file
               </div>
+              <button
+                className="btn btn-config"
+                onClick={handleConfigureMergetool}
+                title="Configure Splice as your global git mergetool"
+              >
+                ⚙ Configure Global Mergetool
+              </button>
             </div>
           )}
         </div>
@@ -368,17 +1012,31 @@ function App() {
         >
           <div className="pane-header">Remote (Theirs)</div>
           {session ? (
-            renderContent(session.all_remote_content)
+            renderSidePane(session.all_remote_content, highlightedRemote, computeConflictIndices.remote)
           ) : (
             <div className="pane-content pane-placeholder">
               <div className="placeholder-icon">📂</div>
               <div className="placeholder-text">
-                Waiting for conflicts<br />
+                Waiting for conflicts
+                <br />
                 to resolve...
               </div>
             </div>
           )}
         </div>
+
+        {/* BASE (optional, toggled by Cmd+\) */}
+        {showBase && (
+          <BasePane
+            content={session?.all_base_content ?? ""}
+            conflicts={session?.conflicts ?? []}
+            activeConflictId={currentConflictId}
+            scrollRef={refs.base}
+            onScroll={() => handleScroll("base")}
+            highlightedLines={highlightedBase}
+          />
+        )}
+      </div>
       </div>
 
       {/* Magic Merge Dialog */}
@@ -391,6 +1049,27 @@ function App() {
           onClose={handleCloseMagic}
         />
       )}
+
+      {/* Watched Repos Panel */}
+      <WatchedRepoPanel
+        isOpen={showWatcherPanel}
+        repos={watchedRepoDetails}
+        watcherRunning={watcherRunning}
+        onClose={handleCloseWatcherPanel}
+        onRemoveRepo={handleRemoveRepoFromWatcher}
+        onAddRepo={handleAddWatchedRepo}
+        onStopWatcher={handleStopWatcher}
+        onOpenConflictedFile={handleOpenConflictedFile}
+        refreshKey={panelRefreshKey}
+        highlightedFiles={highlightedFiles}
+        onSetHighlightedFiles={setHighlightedFiles}
+      />
+
+      {/* Shortcuts Help Overlay */}
+      <ShortcutsOverlay
+        isOpen={showShortcuts}
+        onClose={() => setShowShortcuts(false)}
+      />
 
       {/* Conflict Overview Sidebar */}
       <ConflictOverview
@@ -405,22 +1084,37 @@ function App() {
       {error && (
         <div className="toast">
           <span>{error}</span>
-          <button className="toast-close" onClick={() => setError(null)}>×</button>
+          <button className="toast-close" onClick={() => setError(null)}>
+            ×
+          </button>
         </div>
       )}
 
-      {/* Bottom Navigation */}
-      <ConflictNav
+      {/* Bottom Status Bar */}
+      <StatusBar
+        session={session}
+        diffs={diffs}
         currentIndex={currentConflictIndex}
-        totalCount={session?.conflicts.length ?? 0}
-        resolvedCount={session?.resolved_count ?? 0}
-        saved={session?.saved ?? false}
+        canUndo={(session?.undo_stack?.length ?? 0) > 0}
+        canRedo={(session?.redo_stack?.length ?? 0) > 0}
         hasSession={session !== null}
+        loading={loading}
+        autoStartEnabled={autoStartEnabled}
+        isMergetoolMode={isMergetoolMode}
+        watcherRunning={watcherRunning}
+        watchedRepoCount={watchedRepoCount}
         onPrevConflict={handlePrevConflict}
         onNextConflict={handleNextConflict}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
         onMagicMerge={handleMagicMerge}
         onSave={handleSave}
         onOpenFile={handleOpenFile}
+        onConfigureMergetool={handleConfigureMergetool}
+        onToggleAutoStart={handleToggleAutoStart}
+        onAddWatchedRepo={handleAddWatchedRepo}
+        onStopWatcher={handleStopWatcher}
+        onOpenWatcherPanel={handleOpenWatcherPanel}
       />
     </div>
   );

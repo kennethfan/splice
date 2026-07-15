@@ -1,10 +1,10 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::parser;
 
 /// Action to take when resolving a conflict.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub enum ResolveAction {
     Local,
     Remote,
@@ -15,30 +15,37 @@ pub enum ResolveAction {
 /// Resolve a single conflict block by ID.
 #[tauri::command]
 pub fn resolve_conflict(
-    _session_id: usize,
+    file_path: String,
     conflict_id: usize,
     action: ResolveAction,
-    state: tauri::State<'_, Mutex<Option<parser::MergeSession>>>,
+    state: tauri::State<'_, Mutex<HashMap<String, parser::MergeSession>>>,
 ) -> Result<parser::MergeSession, String> {
     let mut guard = state.lock().map_err(|e| format!("State lock error: {}", e))?;
 
-    let session = guard.as_mut().ok_or("No active session")?;
+    let session = guard
+        .get_mut(&file_path)
+        .ok_or_else(|| format!("Session not found for file: {}", file_path))?;
 
-    // Verify session_id matches
-    // (For MVP we only support one session, so we just check it exists)
-
-    // Convert the action to a ConflictStatus
-    let new_status = match action {
-        ResolveAction::Local => parser::ConflictStatus::ResolvedWithLocal,
-        ResolveAction::Remote => parser::ConflictStatus::ResolvedWithRemote,
-        ResolveAction::Both => parser::ConflictStatus::ResolvedWithBoth,
-        ResolveAction::Manual(content) => parser::ConflictStatus::ResolvedManual(content),
+    // Convert the action to a ConflictStatus and determine the label
+    let (new_status, action_label) = match action {
+        ResolveAction::Local => (parser::ConflictStatus::ResolvedWithLocal, "Local"),
+        ResolveAction::Remote => (parser::ConflictStatus::ResolvedWithRemote, "Remote"),
+        ResolveAction::Both => (parser::ConflictStatus::ResolvedWithBoth, "Both"),
+        ResolveAction::Manual(content) => {
+            (parser::ConflictStatus::ResolvedManual(content), "Manual")
+        }
     };
 
-    // Resolve the conflict
-    session
+    // Capture previous status for undo before resolving
+    let prev_status = session
         .resolve_conflict(conflict_id, new_status)
         .ok_or_else(|| format!("Conflict {} not found", conflict_id))?;
+
+    // Push undo entry
+    session.push_undo(parser::UndoEntry {
+        description: format!("Resolve conflict {} with {}", conflict_id, action_label),
+        statuses: vec![(conflict_id, prev_status)],
+    });
 
     Ok(session.clone())
 }

@@ -12,10 +12,10 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
+  // 2. tauri expects a fixed port; use VITE_PORT from env or default 1420
   server: {
-    port: 1420,
-    strictPort: true,
+    port: parseInt(process.env.VITE_PORT || "1420"),
+    strictPort: false, // fallback to next port if busy; tauri-dev.sh pre-validates when used
     host: host || false,
     hmr: host
       ? {

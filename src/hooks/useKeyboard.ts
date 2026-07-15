@@ -13,6 +13,8 @@ export interface KeyboardHandlers {
   onRedo: () => void;
   onToggleBasePanel: () => void;
   onOpenOverview: () => void;
+  onCloseTab: () => void;
+  onToggleDebug?: () => void;
 }
 
 /**
@@ -38,6 +40,10 @@ export function useKeyboard(handlers: KeyboardHandlers) {
           case "'":
             e.preventDefault();
             handlers.onAcceptLocal();
+            break;
+          case ";":
+            e.preventDefault();
+            handlers.onAcceptBoth();
             break;
           case ".":
             e.preventDefault();
@@ -70,6 +76,16 @@ export function useKeyboard(handlers: KeyboardHandlers) {
           case "p":
             e.preventDefault();
             handlers.onOpenOverview();
+            break;
+          case "w":
+            e.preventDefault();
+            handlers.onCloseTab();
+            break;
+          case "d":
+            if (e.shiftKey) {
+              e.preventDefault();
+              handlers.onToggleDebug?.();
+            }
             break;
         }
       } else {

@@ -230,7 +230,7 @@ fn collect_line(
     }
 }
 
-/// Finalize the current conflict block and add it to the list.
+//// Finalize the current conflict block and add it to the list.
 fn finish_conflict(
     conflicts: &mut Vec<ConflictBlock>,
     local: &mut Vec<String>,
@@ -367,6 +367,8 @@ pub fn extract_remote_content(content: &str) -> String {
 mod tests {
     use super::*;
 
+    // ── Basic parsing ──
+
     #[test]
     fn test_no_conflicts() {
         let content = "line1\nline2\nline3\n";
@@ -469,10 +471,7 @@ mod tests {
     #[test]
     fn test_no_whitespace_markers() {
         let content = "<<<<<<<HEAD\nlocal\n=======\nremote\n>>>>>>>branch\n";
-        // Standard markers require a space after the marker
-        // "<<<<<<<HEAD" without space is not a valid marker
         let conflicts = parse_conflicts(content);
-        // Should not detect any conflicts
         assert!(conflicts.is_empty());
     }
 
@@ -502,13 +501,223 @@ mod tests {
         let content = "before\n<<<<<<< HEAD\nlocal\n=======\nremote\n>>>>>>> branch\nafter\n";
         let conflicts = parse_conflicts(content);
         assert_eq!(conflicts.len(), 1);
-        // The parser only returns conflict blocks, not the surrounding content
-        // That's handled by extract_local_content and extract_remote_content
         let local_full = extract_local_content(content);
         let remote_full = extract_remote_content(content);
         assert!(local_full.starts_with("before\n"));
         assert!(local_full.ends_with("after\n"));
         assert!(remote_full.starts_with("before\n"));
         assert!(remote_full.ends_with("after\n"));
+    }
+
+    // ── Edge cases ──
+
+    #[test]
+    fn test_empty_file() {
+        let conflicts = parse_conflicts("");
+        assert!(conflicts.is_empty());
+
+        let local = extract_local_content("");
+        assert_eq!(local, "");
+
+        let remote = extract_remote_content("");
+        assert_eq!(remote, "");
+    }
+
+    #[test]
+    fn test_only_conflict_markers_no_content() {
+        // This should not create a conflict block since local and remote are both empty
+        let content = "<<<<<<< HEAD\n=======\n>>>>>>> branch\n";
+        let conflicts = parse_conflicts(content);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_consecutive_conflicts_no_gap() {
+        // Two conflicts right next to each other with no normal lines in between
+        let content = "<<<<<<< HEAD\nlocal1\n=======\nremote1\n>>>>>>> branch\n<<<<<<< HEAD\nlocal2\n=======\nremote2\n>>>>>>> branch\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 2);
+        assert_eq!(conflicts[0].id, 1);
+        assert_eq!(conflicts[1].id, 2);
+        assert_eq!(conflicts[0].local_lines, vec!["local1"]);
+        assert_eq!(conflicts[1].local_lines, vec!["local2"]);
+        // The first block ends at line 5, second starts at line 6
+        assert_eq!(conflicts[0].end_line, 5);
+        assert_eq!(conflicts[1].start_line, 6);
+    }
+
+    #[test]
+    fn test_mixed_zdiff3_and_standard() {
+        // First block with zdiff3, second without
+        let content = "<<<<<<< HEAD\nlocal\n||||||| base\nbase_content\n=======\nremote\n>>>>>>> branch\nnormal\n<<<<<<< HEAD\nlocal2\n=======\nremote2\n>>>>>>> branch\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 2);
+        // First block has base
+        assert!(conflicts[0].base_lines.is_some());
+        assert_eq!(conflicts[0].local_lines, vec!["local"]);
+        assert_eq!(conflicts[0].base_lines.clone().unwrap(), vec!["base_content"]);
+        assert_eq!(conflicts[0].remote_lines, vec!["remote"]);
+        // Second block (standard) has no base
+        assert!(conflicts[1].base_lines.is_none());
+        assert_eq!(conflicts[1].local_lines, vec!["local2"]);
+        assert_eq!(conflicts[1].remote_lines, vec!["remote2"]);
+    }
+
+    #[test]
+    fn test_unicode_and_emoji_in_conflicts() {
+        let content = "<<<<<<< HEAD\nconst greeting = \"你好，世界！\";\nconst emoji = \"🚀🌍\";\n=======\nconst greeting = \"Hello, 🌍!\";\n>>>>>>> branch\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].local_lines[0], "const greeting = \"你好，世界！\";");
+        assert_eq!(conflicts[0].local_lines[1], "const emoji = \"🚀🌍\";");
+        assert_eq!(conflicts[0].remote_lines[0], "const greeting = \"Hello, 🌍!\";");
+    }
+
+    #[test]
+    fn test_whitespace_only_lines_in_conflict() {
+        let content = "<<<<<<< HEAD\n  \n\t\n=======\n    \n>>>>>>> branch\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].local_lines, vec!["  ", "\t"]);
+        assert_eq!(conflicts[0].remote_lines, vec!["    "]);
+    }
+
+    #[test]
+    fn test_marker_like_content_lines() {
+        // Lines that LOOK like markers but aren't (no trailing space for <<<, >>>, |||)
+        let content = "<<<<<<< HEAD\nconst x = 1; // ======= is not a marker here\nconst y = 2; // >>>>>>> is not a marker here either\n=======\nconst x = 2;\n>>>>>>> branch\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].local_lines.len(), 2);
+        assert_eq!(conflicts[0].remote_lines.len(), 1);
+        // Local lines contain the "=======" and ">>>>>>>" as plain text because
+        // they are not at the start of the line or don't match the marker pattern
+        assert_eq!(conflicts[0].local_lines[0], "const x = 1; // ======= is not a marker here");
+        assert_eq!(conflicts[0].local_lines[1], "const y = 2; // >>>>>>> is not a marker here either");
+    }
+
+    #[test]
+    fn test_trailing_whitespace_on_markers() {
+        // Git adds "/n" at the end of markers; our parser trims_end
+        let content = "<<<<<<< HEAD\nlocal\n=======\nremote\n>>>>>>> branch  \n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].local_lines, vec!["local"]);
+        assert_eq!(conflicts[0].remote_lines, vec!["remote"]);
+    }
+
+    #[test]
+    fn test_line_numbers_correct() {
+        let content = "line0\n<<<<<<< HEAD\nlocal\n=======\nremote\n>>>>>>> branch\nline6\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 1);
+        // <<<<<<< is line 2, >>>>>>> is line 6
+        assert_eq!(conflicts[0].start_line, 2);
+        assert_eq!(conflicts[0].end_line, 6);
+    }
+
+    #[test]
+    fn test_extract_local_with_mixed_formats() {
+        let content = "<<<<<<< HEAD\nlocal1\n||||||| base\nbase1\n=======\nremote1\n>>>>>>> branch\nnormal\n<<<<<<< HEAD\nlocal2\n=======\nremote2\n>>>>>>> branch\n";
+        let local = extract_local_content(content);
+        assert!(local.contains("local1"));
+        assert!(local.contains("local2"));
+        assert!(local.contains("normal"));
+        assert!(!local.contains("base1"));
+        assert!(!local.contains("remote1"));
+    }
+
+    #[test]
+    fn test_extract_remote_same_as_local_unchanged_parts() {
+        let content = "shared_code\n<<<<<<< HEAD\nlocal_change\n=======\nremote_change\n>>>>>>> branch\nshared_again\n";
+        let local = extract_local_content(content);
+        let remote = extract_remote_content(content);
+        // Both should contain the shared parts
+        assert!(local.starts_with("shared_code\n"));
+        assert!(remote.starts_with("shared_code\n"));
+        assert!(local.ends_with("shared_again\n"));
+        assert!(remote.ends_with("shared_again\n"));
+        // But different within the conflict
+        assert!(local.contains("local_change"));
+        assert!(remote.contains("remote_change"));
+    }
+
+    #[test]
+    fn test_unclosed_conflict_at_start_of_file() {
+        let content = "<<<<<<< HEAD\nlocal\n=======\nremote\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].local_lines, vec!["local"]);
+        assert_eq!(conflicts[0].remote_lines, vec!["remote"]);
+    }
+
+    #[test]
+    fn test_only_normal_lines_no_markers() {
+        let content = "fn hello() {\n    println!(\"hi\");\n}\n";
+        let conflicts = parse_conflicts(content);
+        assert!(conflicts.is_empty());
+
+        let local = extract_local_content(content);
+        assert_eq!(local, content);
+
+        let remote = extract_remote_content(content);
+        assert_eq!(remote, content);
+    }
+
+    #[test]
+    fn test_just_markers_with_empty_lines_between() {
+        let content = "<<<<<<< HEAD\n\n\n=======\n\n\n>>>>>>> branch\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].local_lines, vec!["", ""]);
+        assert_eq!(conflicts[0].remote_lines, vec!["", ""]);
+    }
+
+    #[test]
+    fn test_sequential_unclosed_conflicts_triggers_emergency_close() {
+        // Two conflicts started without closing the first
+        let content = "<<<<<<< HEAD\nlocal1\n=======\nremote1\n<<<<<<< HEAD\nlocal2\n=======\nremote2\n>>>>>>> branch\n";
+        let conflicts = parse_conflicts(content);
+        assert_eq!(conflicts.len(), 2);
+        assert_eq!(conflicts[0].id, 1);
+        assert_eq!(conflicts[1].id, 2);
+        // First conflict should be emergency-closed before <<<<<<< on line 5
+        assert_eq!(conflicts[0].local_lines, vec!["local1"]);
+    }
+
+    #[test]
+    fn test_truly_nested_conflicts() {
+        // True nesting: a <<<<<<< appears inside another conflict's content
+        // before the outer >>>>>>>. This can happen in rebase/octopus merges.
+        // The parser should emergency-close the outer conflict and treat
+        // the inner one as a separate conflict.
+        let content = concat!(
+            "<<<<<<< HEAD\n",
+            "outer_local\n",
+            "<<<<<<< HEAD\n",
+            "inner_local\n",
+            "=======\n",
+            "inner_remote\n",
+            ">>>>>>> inner\n",
+            "=======\n",
+            "outer_remote\n",
+            ">>>>>>> outer\n",
+        );
+        let conflicts = parse_conflicts(content);
+        // Should produce 2 conflicts: the outer (emergency-closed) and the inner
+        assert_eq!(conflicts.len(), 2, "Nested markers should produce 2 separate conflicts");
+
+        // First conflict: outer emergency-closed at line 3 (when inner <<<<<<< is encountered).
+        // Since the outer never reached its =======, remote_lines is empty.
+        assert_eq!(conflicts[0].id, 1);
+        assert_eq!(conflicts[0].local_lines, vec!["outer_local"]);
+        assert!(conflicts[0].remote_lines.is_empty(),
+            "Outer emergency-closed before =======, so remote should be empty");
+
+        // Second conflict: the inner one (fully closed)
+        assert_eq!(conflicts[1].id, 2);
+        assert_eq!(conflicts[1].local_lines, vec!["inner_local"]);
+        assert_eq!(conflicts[1].remote_lines, vec!["inner_remote"]);
+        assert!(conflicts[1].base_lines.is_none());
     }
 }
