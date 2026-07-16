@@ -1008,6 +1008,13 @@ function App() {
                     autoFocus
                     placeholder="Edit the merged content here..."
                   />
+                  {/* Live syntax-highlighted preview below the editor */}
+                  {inlineEditText.trim() && (
+                    <InlinePreview
+                      content={inlineEditText}
+                      fileExtension={session.file_extension}
+                    />
+                  )}
                   <div className="inline-editor-actions">
                     <button
                       type="button"
@@ -1341,6 +1348,37 @@ function App() {
         onStopWatcher={handleStopWatcher}
         onOpenWatcherPanel={handleOpenWatcherPanel}
       />
+    </div>
+  );
+}
+
+/**
+ * Live preview of the inline editor content with syntax highlighting.
+ * Re-renders on every keystroke using highlightLines from the existing lib.
+ */
+function InlinePreview({ content, fileExtension }: { content: string; fileExtension: string }) {
+  const highlightedLines = useMemo(
+    () => highlightLines(content, fileExtension),
+    [content, fileExtension]
+  );
+
+  return (
+    <div className="inline-preview-pane">
+      <div className="inline-preview-pane-header">
+        <span className="inline-preview-pane-icon">▸</span>
+        Live Preview
+      </div>
+      <div className="inline-preview-pane-body">
+        {highlightedLines.map((html, i) => (
+          <div key={i} className="inline-preview-pane-line">
+            <span className="inline-preview-pane-num">{i + 1}</span>
+            <span
+              className="inline-preview-pane-text"
+              dangerouslySetInnerHTML={{ __html: html || " " }}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
