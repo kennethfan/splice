@@ -8,6 +8,7 @@ pub mod watcher;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -46,6 +47,37 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Mutex::new(initial_sessions))
         .manage(Mutex::new(watcher::WatcherState::new()))
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Check if any session has unsaved changes or unresolved conflicts.
+                // Must use nested is_some_and (returning bool) instead of and_then
+                // (returning Option<MutexGuard>) to avoid E0515 borrow errors
+                // from returning a MutexGuard that borrows the closure parameter.
+                let needs_confirmation = window
+                    .try_state::<Mutex<HashMap<String, parser::MergeSession>>>()
+                    .is_some_and(|state_ref| {
+                        state_ref
+                            .lock()
+                            .ok()
+                            .is_some_and(|guard| {
+                                guard.values().any(|s| {
+                                    s.total_count > 0
+                                        && (!s.saved
+                                            || s.conflicts
+                                                .iter()
+                                                .any(|c| !c.is_resolved()))
+                                })
+                            })
+                    });
+
+                if needs_confirmation {
+                    // Prevent close — ask frontend to confirm
+                    api.prevent_close();
+                    let _ = window.emit("close-requested", ());
+                }
+                // No unsaved/unresolved — let close proceed naturally
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::open_file::open_file,
             commands::resolve::resolve_conflict,
@@ -61,6 +93,7 @@ pub fn run() {
             commands::auto_start::uninstall_conflict_hook,
             commands::auto_start::get_conflict_hook_status,
             commands::initial_session::get_initial_session,
+            commands::cleanup_and_exit::cleanup_and_exit,
             watcher::start_watcher,
             watcher::stop_watcher,
             watcher::add_watched_repo,

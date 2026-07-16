@@ -1,3 +1,4 @@
+pub mod cleanup_and_exit;
 pub mod open_file;
 pub mod resolve;
 pub mod magic_merge;
@@ -10,6 +11,7 @@ pub mod configure_mergetool;
 pub mod auto_start;
 pub mod initial_session;
 
+pub use cleanup_and_exit::*;
 pub use open_file::*;
 pub use resolve::*;
 pub use magic_merge::*;

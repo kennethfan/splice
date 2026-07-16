@@ -10,7 +10,8 @@ import { WatchedRepoPanel } from "./components/WatchedRepoPanel";
 import { ShortcutsOverlay } from "./components/ShortcutsOverlay";
 import { useSyncScroll } from "./hooks/useSyncScroll";
 import { useKeyboard } from "./hooks/useKeyboard";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, confirm, message } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import type { MergeSession, ResolveAction, ConflictBlock } from "./lib/tauri";
 import {
   openFile as openFileViaTauri,
@@ -170,11 +171,39 @@ function App() {
     setScrollCounter((c) => c + 1); // force auto-scroll to first conflict
   }, []);
 
-  // Close a tab and clean up backend session
+  // Close a tab and clean up backend session.
+  // HARD BLOCK if there are unresolved conflicts — must resolve first.
+  // Prompts if there are only unsaved changes (already resolved).
   const handleCloseTab = useCallback(
     async (index: number) => {
       const tab = tabs[index];
       if (!tab) return;
+
+      if (tab.session.total_count > 0) {
+        const unresolvedCount = tab.session.conflicts.filter(
+          (c) => c.status === "Unresolved"
+        ).length;
+
+        // HARD BLOCK: cannot close tab with unresolved conflicts
+        if (unresolvedCount > 0) {
+          const fileName = tab.session.file_path.split("/").pop() || tab.session.file_path;
+          await message(
+            `"${fileName}" has ${unresolvedCount} unresolved conflict(s).\n\nPlease resolve all conflicts before closing this tab.`,
+            { title: "Unresolved Conflicts", kind: "warning" }
+          );
+          return;
+        }
+
+        // Confirm if there are unsaved changes (all conflicts resolved)
+        if (!tab.session.saved) {
+          const fileName = tab.session.file_path.split("/").pop() || tab.session.file_path;
+          const confirmed = await confirm(
+            `"${fileName}" has unsaved changes.\n\nClose without saving?`,
+            { title: "Unsaved Changes", kind: "warning" }
+          );
+          if (!confirmed) return;
+        }
+      }
 
       try {
         await closeSession(tab.filePath);
@@ -349,9 +378,22 @@ function App() {
     [session]
   );
 
-  // Save
+  // Save — warns if there are unresolved conflicts
   const handleSave = useCallback(async () => {
     if (!session) return;
+
+    // Check for unresolved conflicts
+    const unresolvedCount = session.conflicts.filter(
+      (c) => c.status === "Unresolved"
+    ).length;
+    if (unresolvedCount > 0) {
+      const confirmed = await confirm(
+        `${unresolvedCount} conflict(s) still unresolved.\n\nIf you save now, the unresolved conflicts will remain as conflict markers in the file.\n\nSave anyway?`,
+        { title: "Unresolved Conflicts", kind: "warning" }
+      );
+      if (!confirmed) return;
+    }
+
     try {
       await saveFile(activeFilePath);
       updateActiveSession({ ...session, saved: true });
@@ -644,6 +686,67 @@ function App() {
       unlisten?.();
     };
   }, []);
+
+  // Ref to access latest tabs from the close-requested listener without
+  // re-registering the listener on every tabs change.
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+
+  // Listen for window close-requested events from the Rust backend.
+  // Triggered when the user clicks the window close button / Cmd+Q
+  // while there are unsaved changes.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const handleCloseRequested = async () => {
+      const currentTabs = tabsRef.current;
+
+      // Collect all tabs with unsaved changes or unresolved conflicts
+      const unsavedTabs = currentTabs.filter((t) => {
+        if (t.session.total_count === 0) return false;
+        const unresolvedCount = t.session.conflicts.filter(
+          (c) => c.status === "Unresolved"
+        ).length;
+        return !t.session.saved || unresolvedCount > 0;
+      });
+
+      if (unsavedTabs.length > 0) {
+        const names = unsavedTabs
+          .map(
+            (t) =>
+              t.session.file_path.split("/").pop() || t.session.file_path
+          )
+          .join("\n");
+        const confirmed = await confirm(
+          `${unsavedTabs.length} file(s) have unsaved changes or unresolved conflicts:\n\n${names}\n\nQuit anyway? Unsaved changes will be lost.`,
+          { title: "Unsaved Changes", kind: "warning" }
+        );
+        if (!confirmed) return;
+      }
+
+      // User confirmed — force exit via Tauri command (bypasses window close event)
+      try {
+        await invoke("cleanup_and_exit");
+      } catch {
+        // Fallback: close all sessions manually
+        for (const tab of currentTabs) {
+          try {
+            await closeSession(tab.filePath);
+          } catch {
+            // Ignore errors on individual session close
+          }
+        }
+      }
+    };
+
+    listen("close-requested", handleCloseRequested).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      unlisten?.();
+    };
+  }, []); // Only register once — uses tabsRef for latest state
 
   // Close active tab shortcut (Cmd+W)
   const handleCloseActiveTab = useCallback(() => {
