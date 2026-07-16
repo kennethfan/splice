@@ -167,6 +167,7 @@ function App() {
     setActiveTabIndex(index);
     setActiveConflictIndex(0);
     setShowOverview(false);
+    setScrollCounter((c) => c + 1); // force auto-scroll to first conflict
   }, []);
 
   // Close a tab and clean up backend session
@@ -312,6 +313,13 @@ function App() {
     try {
       const fresh = await openFileViaTauri(session.file_path);
       updateActiveSession(fresh);
+      // Clear transient UI state since the file was re-opened fresh
+      usedSides.current.clear();
+      setInlineEditId(null);
+      setInlineEditText("");
+      // Reset to first conflict and scroll
+      setActiveConflictIndex(0);
+      setScrollCounter((c) => c + 1);
     } catch (err) {
       setError(String(err));
     }
@@ -379,6 +387,10 @@ function App() {
     try {
       const updated = await undoViaTauri(activeFilePath);
       updateActiveSession(updated);
+      // Clear transient UI state that refers to the old conflict state
+      usedSides.current.clear();
+      setInlineEditId(null);
+      setInlineEditText("");
     } catch (err) {
       const msg = String(err);
       if (msg.includes("Nothing to undo")) {
@@ -394,6 +406,10 @@ function App() {
     try {
       const updated = await redoViaTauri(activeFilePath);
       updateActiveSession(updated);
+      // Clear transient UI state that refers to the old conflict state
+      usedSides.current.clear();
+      setInlineEditId(null);
+      setInlineEditText("");
     } catch (err) {
       const msg = String(err);
       if (msg.includes("Nothing to redo")) {
@@ -673,20 +689,81 @@ function App() {
   // Counter to force scroll effect even when currentConflictId doesn't change
   const [scrollCounter, setScrollCounter] = useState(0);
 
+  // Override target for auto-scroll — used by side pane buttons to scroll
+  // the result pane to a specific conflict after resolution (even if that
+  // conflict is now resolved and no longer in the active navigation).
+  const scrollToIdRef = useRef<number | null>(null);
+
+  // Track which conflict to highlight in the result pane from side pane click.
+  // Uses a counter to trigger re-render so the CSS class is applied/removed.
+  const [highlightedConflictId, setHighlightedConflictId] = useState<number | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleSidePaneClick = useCallback((conflictId: number) => {
+    setHighlightedConflictId(conflictId);
+    // Clear any existing timer
+    if (highlightTimerRef.current !== null) {
+      clearTimeout(highlightTimerRef.current);
+    }
+    // Auto-clear after 1.5s so the highlight fades away
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightedConflictId(null);
+      highlightTimerRef.current = null;
+    }, 1500);
+  }, []);
+
+  // Cleanup highlight timer on unmount
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Safety timeout for auto-scroll guard — prevents programmaticScrollRef
+  // from staying stuck if RAF chains are orphaned.
+  const autoScrollGuardTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearAutoScrollGuard = useCallback(() => {
+    programmaticScrollRef.current = false;
+    if (autoScrollGuardTimer.current !== null) {
+      clearTimeout(autoScrollGuardTimer.current);
+      autoScrollGuardTimer.current = null;
+    }
+  }, []);
+
   // Auto-scroll to the active conflict block in the result pane,
   // and sync the side panes to the same proportional scroll position.
   // Uses programmaticScrollRef to prevent cascading feedback loops
   // with the pane scroll-sync mechanism.
+  //
+  // When scrollToIdRef.current is set (by side pane buttons), it overrides
+  // currentConflictId so the result pane scrolls to a specific conflict
+  // even after it becomes resolved.
   useEffect(() => {
-    if (currentConflictIndex < 0 || currentConflictId <= 0) return;
+    // Use override target if set (e.g. from side pane button click),
+    // otherwise fall back to the current-active conflict.
+    // Clear the override immediately so subsequent effect runs
+    // (e.g. keyboard navigation) use currentConflictId.
+    const targetId = scrollToIdRef.current ?? currentConflictId;
+    scrollToIdRef.current = null;
+    if (targetId <= 0) return;
     const pane = refs.center.current;
     if (!pane) return;
     const frameId = requestAnimationFrame(() => {
-      const el = pane.querySelector(`[data-conflict-id="${currentConflictId}"]`);
+      const el = pane.querySelector(`[data-conflict-id="${targetId}"]`);
       if (el) {
         // Mark as programmatic before changing scroll, so handleScroll
         // doesn't cascade back.
         programmaticScrollRef.current = true;
+        // Safety: clear the guard after 500ms if the RAF chain doesn't complete
+        if (autoScrollGuardTimer.current !== null) {
+          clearTimeout(autoScrollGuardTimer.current);
+        }
+        autoScrollGuardTimer.current = setTimeout(() => {
+          programmaticScrollRef.current = false;
+          autoScrollGuardTimer.current = null;
+        }, 500);
         // Use "auto" instead of "smooth" to avoid trailing scroll events
         // during the animation that would trigger cascading syncs.
         el.scrollIntoView({ behavior: "auto", block: "center" });
@@ -712,13 +789,21 @@ function App() {
 
           // Clear guard after syncing so user-initiated scroll events work
           requestAnimationFrame(() => {
-            programmaticScrollRef.current = false;
+            clearAutoScrollGuard();
           });
         });
       }
     });
-    return () => cancelAnimationFrame(frameId);
-  }, [currentConflictIndex, currentConflictId, scrollCounter, refs.center, refs.left, refs.right, refs.base, programmaticScrollRef]);
+    return () => {
+      cancelAnimationFrame(frameId);
+      // Also cancel the safety timeout so a stale timer doesn't
+      // prematurely clear a guard set by a re-fired effect.
+      if (autoScrollGuardTimer.current !== null) {
+        clearTimeout(autoScrollGuardTimer.current);
+        autoScrollGuardTimer.current = null;
+      }
+    };
+  }, [currentConflictIndex, currentConflictId, scrollCounter, refs.center, refs.left, refs.right, refs.base, programmaticScrollRef, clearAutoScrollGuard]);
 
   // Auto-clear file highlight flashes after the animation finishes (1.5s)
   // Lives in App.tsx so the state persists across panel open/close
@@ -846,6 +931,9 @@ function App() {
               else if (status === 'ResolvedWithLocal') await handleResolve(nextConflict.id, 'Both');
             }
             usedSides.current.add(sideKey);
+            // Scroll the result pane to this conflict after resolving
+            scrollToIdRef.current = nextConflict.id;
+            setScrollCounter((c) => c + 1);
           } catch {
             // Don't mark as used on error
           }
@@ -863,6 +951,9 @@ function App() {
               else if (status === 'ResolvedWithBoth') await handleResolve(nextConflict.id, 'Local');
             }
             usedSides.current.add(sideKey);
+            // Scroll the result pane to this conflict after resolving
+            scrollToIdRef.current = nextConflict.id;
+            setScrollCounter((c) => c + 1);
           } catch {
             // Don't mark as used on error
           }
@@ -873,6 +964,7 @@ function App() {
             key={`conflict-${side}-${nextConflict.id}`}
             className={`conflict-side-block ${sideUsed ? 'conflict-side-block--used' : ''}`}
             data-conflict-id={nextConflict.id}
+            onClick={() => handleSidePaneClick(nextConflict.id)}
           >
             <div className="conflict-side-lines">
               {sideLines.length > 0 ? (
@@ -914,7 +1006,9 @@ function App() {
 
         conflictIdx += 1;
         contentIdx += sideLineCount;
-        i = nextConflict.end_line;
+        // For loop auto-increments i on continue, so subtract 1 to avoid
+        // skipping the line immediately after the conflict markers.
+        i = nextConflict.end_line - 1;
         continue;
       }
 
@@ -992,7 +1086,7 @@ function App() {
           }
 
           result.push(
-            <div key={`conflict-${nextConflict.id}`} className="result-resolved-region">
+            <div key={`conflict-${nextConflict.id}`} className={`result-resolved-region ${highlightedConflictId === nextConflict.id ? 'result-region--highlighted' : ''}`} data-conflict-id={nextConflict.id}>
               {resolvedLines.map((line, li) => (
                 <div key={li} className="pane-line pane-line--resolved">
                   <span className="line-number">{lineIdx + li + 1}</span>
@@ -1001,13 +1095,16 @@ function App() {
               ))}
             </div>
           );
-          lineIdx += resolvedLines.length;
+          // lineIdx tracks position in all_local_content for syntax highlighting.
+          // all_local_content only contains LOCAL lines (not remote). Always advance
+          // by the number of local lines, regardless of resolution choice.
+          lineIdx += nextConflict.local_lines.length;
         } else {
           // Unresolved — detect if this conflict is currently being edited inline
           const isEditing = inlineEditId === nextConflict.id;
 
           result.push(
-            <div key={`conflict-${nextConflict.id}`} className="result-unresolved-region" data-conflict-id={nextConflict.id}>
+            <div key={`conflict-${nextConflict.id}`} className={`result-unresolved-region ${highlightedConflictId === nextConflict.id ? 'result-region--highlighted' : ''}`} data-conflict-id={nextConflict.id}>
               {isEditing ? (
                 <div className="inline-editor">
                   <div className="inline-editor-label">
@@ -1063,7 +1160,7 @@ function App() {
                 </div>
               ) : (
                 <>
-                  <div className="result-unresolved-label">&lt;&lt;&lt;&lt;&lt;&lt;&lt; Yours</div>
+                  <div className="result-unresolved-label">&lt;&lt;&lt;&lt;&lt;&lt;&lt; {session.local_branch || 'Yours'}</div>
                   {nextConflict.local_lines.map((line, li) => (
                     <div key={`local-${li}`} className="pane-line pane-line--conflict">
                       <span className="line-number">{lineIdx + li + 1}</span>
@@ -1077,7 +1174,7 @@ function App() {
                       <span className="line-text">{line}</span>
                     </div>
                   ))}
-                  <div className="result-unresolved-label">&gt;&gt;&gt;&gt;&gt;&gt;&gt; Theirs</div>
+                  <div className="result-unresolved-label">&gt;&gt;&gt;&gt;&gt;&gt;&gt; {session.remote_branch || 'Theirs'}</div>
                   <div className="result-unresolved-actions">
                     <button
                       type="button"
@@ -1092,7 +1189,9 @@ function App() {
               )}
             </div>
           );
-          lineIdx += nextConflict.local_lines.length + nextConflict.remote_lines.length;
+          // Advance lineIdx by local lines only, since syntax highlighting
+          // is derived from all_local_content.
+          lineIdx += nextConflict.local_lines.length;
         }
 
         conflictIdx += 1;
@@ -1218,7 +1317,7 @@ function App() {
           onScroll={() => handleScroll("left")}
         >
           <div className="pane-header">
-            Yours{session?.local_branch ? ` (${session.local_branch})` : ' (Current)'}
+            {session?.local_branch || 'Yours (Current)'}
           </div>
           {session ? (
             renderSidePaneWithActions('local')
@@ -1270,7 +1369,7 @@ function App() {
           onScroll={() => handleScroll("right")}
         >
           <div className="pane-header">
-            Theirs{session?.remote_branch ? ` (${session.remote_branch})` : ' (Merged)'}
+            {session?.remote_branch || 'Theirs (Merged)'}
           </div>
           {session ? (
             renderSidePaneWithActions('remote')

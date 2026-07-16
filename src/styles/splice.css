@@ -2058,6 +2058,46 @@ html, body, #root {
     border-left: 3px solid rgba(255, 107, 107, 0.4);
 }
 
+/* === Conflict Region Highlight (side pane click → result pane flash) === */
+
+.result-region--highlighted {
+    animation: conflict-highlight-flash 1.5s ease-out forwards;
+}
+
+.result-region--highlighted .pane-line--resolved,
+.result-region--highlighted .pane-line--conflict {
+    animation: conflict-line-flash 1.5s ease-out;
+}
+
+@keyframes conflict-highlight-flash {
+    0% {
+        outline: 2px solid rgba(227, 205, 73, 0.6);
+        outline-offset: -2px;
+        background: rgba(227, 205, 73, 0.12);
+    }
+    30% {
+        background: rgba(227, 205, 73, 0.10);
+    }
+    100% {
+        outline: 2px solid transparent;
+        outline-offset: -2px;
+        background: transparent;
+    }
+}
+
+@keyframes conflict-line-flash {
+    0% {
+        background: rgba(227, 205, 73, 0.15) !important;
+        border-left-color: var(--accent-yellow) !important;
+    }
+    30% {
+        background: rgba(227, 205, 73, 0.10) !important;
+    }
+    100% {
+        background: transparent !important;
+    }
+}
+
 /* Live syntax-highlighted preview inside inline editor */
 .inline-preview-pane {
     border-top: 1px solid var(--border-color);

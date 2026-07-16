@@ -38,13 +38,17 @@ pub(crate) fn build_result_content(session: &parser::MergeSession) -> String {
                     i += 1;
                     line_number += 1;
                     while i < total_lines {
-                        let is_end = parser::lexer::detect_marker(lines[i])
+                        let line = lines[i];
+                        let is_end = parser::lexer::detect_marker(line)
                             .map_or(false, |m| m.marker == ">>>>>>>");
-                        i += 1;
-                        line_number += 1;
                         if is_end {
+                            // Advance i past the end marker. Don't increment
+                            // line_number — the outer loop will do that.
+                            i += 1;
                             break;
                         }
+                        i += 1;
+                        line_number += 1;
                     }
 
                     // Add the resolved content instead
@@ -361,5 +365,94 @@ mod tests {
         assert!(result.starts_with("before\n"), "Result should start with 'before'");
         assert!(result.ends_with("after\n"), "Result should end with 'after'");
         assert!(result.contains("remote"), "Result should contain resolved content");
+    }
+
+    #[test]
+    /// Regression test: content loss when local and remote have DIFFERENT line counts.
+    /// The bug was that lineIdx advanced by the resolved line count instead of the
+    /// local line count, causing subsequent normal lines to use wrong highlighted[] indices
+    /// resulting in blank content. This test validates the backend build_result_content
+    /// is correct for this scenario.
+    fn test_local_remote_different_line_counts_content_after_preserved() {
+        // local=3 lines, remote=1 line — the asymmetric case that causes content loss
+        let content = concat!(
+            "before\n",
+            "<<<<<<< HEAD\n",
+            "local_line_1\n",
+            "local_line_2\n",
+            "local_line_3\n",
+            "=======\n",
+            "remote_line_1\n",
+            ">>>>>>> branch\n",
+            "after\n",
+        );
+        let mut session = build_session(content);
+        assert_eq!(session.total_count, 1);
+        assert_eq!(session.conflicts[0].local_lines.len(), 3);
+        assert_eq!(session.conflicts[0].remote_lines.len(), 1);
+
+        // Resolve with Remote
+        session.resolve_conflict(1, parser::ConflictStatus::ResolvedWithRemote);
+        let result = build_result_content(&session);
+        // Should contain "after" — this was getting lost before the fix
+        assert!(result.contains("after"), "Content after conflict should be preserved");
+        assert!(!result.contains("local_line"), "Should not contain local content when resolved with remote");
+        assert_eq!(result, "before\nremote_line_1\nafter\n");
+
+        // Resolve with Local
+        let mut session2 = build_session(content);
+        session2.resolve_conflict(1, parser::ConflictStatus::ResolvedWithLocal);
+        let result2 = build_result_content(&session2);
+        assert_eq!(result2, "before\nlocal_line_1\nlocal_line_2\nlocal_line_3\nafter\n",
+            "Local resolve should keep all 3 local lines + surrounding content");
+
+        // Resolve with Both
+        let mut session3 = build_session(content);
+        session3.resolve_conflict(1, parser::ConflictStatus::ResolvedWithBoth);
+        let result3 = build_result_content(&session3);
+        assert!(result3.contains("after"), "Both resolve should preserve content after conflict");
+        assert_eq!(result3, "before\nlocal_line_1\nlocal_line_2\nlocal_line_3\nremote_line_1\nafter\n",
+            "Both should show local then remote, then 'after'");
+    }
+
+    #[test]
+    /// Regression test: multiple conflicts with asymmetric line counts.
+    fn test_multiple_conflicts_asymmetric_line_counts() {
+        let content = concat!(
+            "header\n",
+            "<<<<<<< HEAD\n",
+            "local_A_long\n",
+            "local_A_extra\n",
+            "=======\n",
+            "remote_A\n",
+            ">>>>>>> branch\n",
+            "middle_shared\n",
+            "<<<<<<< HEAD\n",
+            "local_B\n",
+            "=======\n",
+            "remote_B_long\n",
+            "remote_B_extra\n",
+            "remote_B_third\n",
+            ">>>>>>> branch\n",
+            "footer\n",
+        );
+        let mut session = build_session(content);
+        assert_eq!(session.total_count, 2);
+        assert_eq!(session.conflicts[0].local_lines.len(), 2);
+        assert_eq!(session.conflicts[0].remote_lines.len(), 1);
+        assert_eq!(session.conflicts[1].local_lines.len(), 1);
+        assert_eq!(session.conflicts[1].remote_lines.len(), 3);
+
+        // Resolve first with Local, second with Remote
+        // Resolve first with Local, second with Remote
+        session.resolve_conflict(1, parser::ConflictStatus::ResolvedWithLocal);
+        session.resolve_conflict(2, parser::ConflictStatus::ResolvedWithRemote);
+
+        let result = build_result_content(&session);
+        assert!(result.contains("header"), "Should preserve header");
+        assert!(result.contains("middle_shared"), "Should preserve middle shared content");
+        assert!(result.contains("footer"), "Should preserve footer");
+        assert!(!result.contains("<<<<<<<"), "All conflicts resolved, no markers");
+        assert_eq!(result, "header\nlocal_A_long\nlocal_A_extra\nmiddle_shared\nremote_B_long\nremote_B_extra\nremote_B_third\nfooter\n");
     }
 }

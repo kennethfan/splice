@@ -9,12 +9,18 @@ export interface PaneRefs {
 
 type PaneName = "left" | "center" | "right" | "base";
 
+const GUARD_TIMEOUT_MS = 500;
+
 /**
  * Synchronizes scroll positions across panes proportionally.
  * Supports 3-pane (left, center, right) and 4-pane (with base) layouts.
  *
  * Uses requestAnimationFrame throttling + a programmatic scroll guard
  * to prevent cascading feedback loops between panes.
+ *
+ * Safety: a setTimeout guard auto-clears programmaticScrollRef after
+ * GUARD_TIMEOUT_MS to prevent the flag from getting stuck if RAF chains
+ * are orphaned or fail to complete.
  */
 export function useSyncScroll() {
   const refs: PaneRefs = {
@@ -31,9 +37,40 @@ export function useSyncScroll() {
    * after the browser has processed the resulting scroll events.
    */
   const programmaticScrollRef = useRef(false);
+  const guardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const rafId = useRef<number | null>(null);
   const pendingSource = useRef<PaneName | null>(null);
+
+  /**
+   * Set the programmatic guard + schedule a safety timeout to auto-clear it.
+   * This prevents the flag from getting stuck if RAF chains are orphaned.
+   */
+  const setProgrammaticGuard = useCallback(() => {
+    programmaticScrollRef.current = true;
+
+    // Safety: clear any existing guard timer first
+    if (guardTimerRef.current !== null) {
+      clearTimeout(guardTimerRef.current);
+    }
+
+    // Auto-clear after timeout to prevent stuck flag
+    guardTimerRef.current = setTimeout(() => {
+      programmaticScrollRef.current = false;
+      guardTimerRef.current = null;
+    }, GUARD_TIMEOUT_MS);
+  }, []);
+
+  /**
+   * Clear the programmatic guard + cancel the safety timer.
+   */
+  const clearProgrammaticGuard = useCallback(() => {
+    programmaticScrollRef.current = false;
+    if (guardTimerRef.current !== null) {
+      clearTimeout(guardTimerRef.current);
+      guardTimerRef.current = null;
+    }
+  }, []);
 
   /**
    * Capture the current ratio of the source pane and schedule a sync.
@@ -71,7 +108,7 @@ export function useSyncScroll() {
       const effectiveRatio = srcMax > 0 ? srcPane.scrollTop / srcMax : 0;
 
       // Mark as programmatic before touching scrollTop
-      programmaticScrollRef.current = true;
+      setProgrammaticGuard();
 
       for (const [key, ref] of Object.entries(refs)) {
         if (key !== src && ref.current) {
@@ -84,10 +121,10 @@ export function useSyncScroll() {
       // scroll events triggered by the scrollTop changes above have
       // been dispatched and consumed with the guard active.
       requestAnimationFrame(() => {
-        programmaticScrollRef.current = false;
+        clearProgrammaticGuard();
       });
     });
-  }, []);
+  }, [setProgrammaticGuard, clearProgrammaticGuard]);
 
-  return { refs, handleScroll, programmaticScrollRef };
+  return { refs, handleScroll, programmaticScrollRef, clearProgrammaticGuard };
 }
