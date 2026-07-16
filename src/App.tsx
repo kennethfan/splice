@@ -1192,7 +1192,9 @@ function App() {
           ref={refs.left}
           onScroll={() => handleScroll("left")}
         >
-          <div className="pane-header">Yours (Current)</div>
+          <div className="pane-header">
+            Yours{session?.local_branch ? ` (${session.local_branch})` : ' (Current)'}
+          </div>
           {session ? (
             renderSidePaneWithActions('local')
           ) : (
@@ -1242,7 +1244,9 @@ function App() {
           ref={refs.right}
           onScroll={() => handleScroll("right")}
         >
-          <div className="pane-header">Theirs (Merged)</div>
+          <div className="pane-header">
+            Theirs{session?.remote_branch ? ` (${session.remote_branch})` : ' (Merged)'}
+          </div>
           {session ? (
             renderSidePaneWithActions('remote')
           ) : (

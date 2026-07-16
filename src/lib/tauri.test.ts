@@ -34,6 +34,8 @@ describe("tauri IPC wrappers", () => {
       saved: false,
       undo_stack: [],
       redo_stack: [],
+      local_branch: "",
+      remote_branch: "",
     };
     vi.mocked(invoke).mockResolvedValue(mockSession);
 

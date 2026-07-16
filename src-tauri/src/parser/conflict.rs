@@ -73,6 +73,10 @@ pub struct MergeSession {
     /// Stack of redoable actions
     #[serde(default)]
     pub redo_stack: Vec<UndoEntry>,
+    /// Branch name for the local (ours) side, parsed from conflict markers
+    pub local_branch: String,
+    /// Branch name for the remote (theirs) side, parsed from conflict markers
+    pub remote_branch: String,
 }
 
 /// Result returned by the magic merge operation.
@@ -118,6 +122,27 @@ impl MergeSession {
     /// It is used by `build_result_content` to reconstruct the resolved file.
     /// When the session is created from a `open_file` call, this should be the
     /// raw file content read from disk.
+    /// Parse branch names from conflict markers in the original content.
+    /// Looks for the first `<<<<<<<` and `>>>>>>>` markers to extract the
+    /// local (ours) and remote (theirs) branch names.
+    fn parse_branch_names(content: &str) -> (String, String) {
+        let mut local = String::new();
+        let mut remote = String::new();
+        for line in content.lines() {
+            let trimmed = line.trim_end();
+            if local.is_empty() && trimmed.starts_with("<<<<<<< ") {
+                local = trimmed[7..].trim().to_string();
+            }
+            if remote.is_empty() && trimmed.starts_with(">>>>>>> ") {
+                remote = trimmed[7..].trim().to_string();
+            }
+            if !local.is_empty() && !remote.is_empty() {
+                break;
+            }
+        }
+        (local, remote)
+    }
+
     pub fn new(
         file_path: String,
         conflicts: Vec<ConflictBlock>,
@@ -133,6 +158,8 @@ impl MergeSession {
             .unwrap_or("")
             .to_string();
 
+        let (local_branch, remote_branch) = Self::parse_branch_names(&original_content);
+
         MergeSession {
             file_path,
             file_extension,
@@ -146,6 +173,8 @@ impl MergeSession {
             saved: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            local_branch,
+            remote_branch,
         }
     }
 

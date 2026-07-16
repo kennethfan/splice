@@ -19,6 +19,8 @@ function createMockSession(overrides: Partial<MergeSession> = {}): MergeSession 
     saved: false,
     undo_stack: [],
     redo_stack: [],
+    local_branch: "",
+    remote_branch: "",
     ...overrides,
   };
 }

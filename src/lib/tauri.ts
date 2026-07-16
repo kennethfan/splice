@@ -33,6 +33,10 @@ export interface MergeSession {
   saved: boolean;
   undo_stack: UndoEntry[];
   redo_stack: UndoEntry[];
+  /** Branch name for the local (ours) side, parsed from conflict markers */
+  local_branch: string;
+  /** Branch name for the remote (theirs) side, parsed from conflict markers */
+  remote_branch: string;
 }
 
 export interface UndoEntry {
