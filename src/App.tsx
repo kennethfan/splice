@@ -694,6 +694,12 @@ function App() {
   // conflict is now resolved and no longer in the active navigation).
   const scrollToIdRef = useRef<number | null>(null);
 
+  // Track which side pane buttons are currently resolving (for loading feedback).
+  // Uses a version counter (value never read, only incremented) to trigger re-renders.
+  const resolvingSidesRef = useRef<Set<string>>(new Set());
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_resolvingVersion, setResolvingVersion] = useState(0);
+
   // Track which conflict to highlight in the result pane from side pane click.
   // Uses a counter to trigger re-render so the CSS class is applied/removed.
   const [highlightedConflictId, setHighlightedConflictId] = useState<number | null>(null);
@@ -919,9 +925,13 @@ function App() {
 
         // Show buttons if this side hasn't been used yet AND
         // (conflict is still unresolved OR the other side already chose)
-        const canActNow = !sideUsed && (status === 'Unresolved' || otherUsed);
+        const isResolving = resolvingSidesRef.current.has(sideKey);
+        const canActNow = !sideUsed && !isResolving && (status === 'Unresolved' || otherUsed);
 
         const handleAccept = async () => {
+          if (resolvingSidesRef.current.has(sideKey)) return; // prevent double-click
+          resolvingSidesRef.current.add(sideKey);
+          setResolvingVersion((v) => v + 1);
           try {
             if (side === 'local') {
               if (status === 'Unresolved') await handleResolve(nextConflict.id, 'Local');
@@ -936,10 +946,16 @@ function App() {
             setScrollCounter((c) => c + 1);
           } catch {
             // Don't mark as used on error
+          } finally {
+            resolvingSidesRef.current.delete(sideKey);
+            setResolvingVersion((v) => v + 1);
           }
         };
 
         const handleIgnore = async () => {
+          if (resolvingSidesRef.current.has(sideKey)) return; // prevent double-click
+          resolvingSidesRef.current.add(sideKey);
+          setResolvingVersion((v) => v + 1);
           try {
             if (side === 'local') {
               if (status === 'Unresolved') await handleResolve(nextConflict.id, 'Remote');
@@ -956,6 +972,9 @@ function App() {
             setScrollCounter((c) => c + 1);
           } catch {
             // Don't mark as used on error
+          } finally {
+            resolvingSidesRef.current.delete(sideKey);
+            setResolvingVersion((v) => v + 1);
           }
         };
 
@@ -985,19 +1004,21 @@ function App() {
               <div className="conflict-side-buttons conflict-side-buttons--grouped">
                 <button
                   type="button"
-                  className="conflict-side-btn conflict-side-btn--accept"
+                  className={`conflict-side-btn conflict-side-btn--accept ${isResolving ? 'conflict-side-btn--loading' : ''}`}
                   onClick={handleAccept}
+                  disabled={isResolving}
                   title={`Accept ${side === 'local' ? 'your' : 'their'} version`}
                 >
-                  {side === 'local' ? '>>' : '<<'}
+                  {isResolving ? '◌' : (side === 'local' ? '>>' : '<<')}
                 </button>
                 <button
                   type="button"
-                  className="conflict-side-btn conflict-side-btn--ignore"
+                  className={`conflict-side-btn conflict-side-btn--ignore ${isResolving ? 'conflict-side-btn--loading' : ''}`}
                   onClick={handleIgnore}
+                  disabled={isResolving}
                   title={`Ignore ${side === 'local' ? 'your' : 'their'} version, use the other side`}
                 >
-                  ✕
+                  {isResolving ? '◌' : '✕'}
                 </button>
               </div>
             )}
@@ -1087,6 +1108,16 @@ function App() {
 
           result.push(
             <div key={`conflict-${nextConflict.id}`} className={`result-resolved-region ${highlightedConflictId === nextConflict.id ? 'result-region--highlighted' : ''}`} data-conflict-id={nextConflict.id}>
+              <div className="result-resolved-badge">
+                <span className="result-resolved-check">✓</span>
+                <span className="result-resolved-label">Resolved</span>
+                <span className="result-resolved-choice">
+                  {nextConflict.status === 'ResolvedWithLocal' ? session.local_branch || 'Yours' : ''}
+                  {nextConflict.status === 'ResolvedWithRemote' ? session.remote_branch || 'Theirs' : ''}
+                  {nextConflict.status === 'ResolvedWithBoth' ? 'Both' : ''}
+                  {typeof nextConflict.status === 'object' && 'ResolvedManual' in nextConflict.status ? 'Manual' : ''}
+                </span>
+              </div>
               {resolvedLines.map((line, li) => (
                 <div key={li} className="pane-line pane-line--resolved">
                   <span className="line-number">{lineIdx + li + 1}</span>

@@ -1976,14 +1976,27 @@ html, body, #root {
     user-select: none;
 }
 
-.conflict-side-btn:hover {
+.conflict-side-btn:hover:not(:disabled) {
     filter: brightness(1.4);
     transform: scale(1.08);
 }
 
-.conflict-side-btn:active {
+.conflict-side-btn:active:not(:disabled) {
     transform: scale(0.93);
     filter: brightness(0.9);
+}
+
+.conflict-side-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+    filter: none;
+    animation: conflict-btn-loading 800ms ease-in-out infinite;
+}
+
+@keyframes conflict-btn-loading {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 0.25; }
 }
 
 .conflict-side-btn--accept {
@@ -2021,9 +2034,56 @@ html, body, #root {
 
 /* === Result Pane (merged RESULT view) === */
 
+.result-resolved-region {
+    border-left: 3px solid rgba(86, 211, 100, 0.5);
+    margin: 2px 0;
+    background: rgba(86, 211, 100, 0.04);
+}
+
+.result-resolved-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px 3px 12px;
+    background: rgba(86, 211, 100, 0.10);
+    border-bottom: 1px solid rgba(86, 211, 100, 0.15);
+    user-select: none;
+    font-family: var(--font-ui);
+}
+
+.result-resolved-check {
+    color: var(--accent-green);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.result-resolved-label {
+    color: var(--accent-green);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.result-resolved-choice {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 9px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    opacity: 0.7;
+}
+
 .result-resolved-region .pane-line--resolved {
     background: rgba(86, 211, 100, 0.08);
     border-left: 3px solid rgba(86, 211, 100, 0.4);
+}
+
+.result-resolved-region .pane-line--resolved:hover {
+    background: rgba(86, 211, 100, 0.15);
+    border-left-color: var(--accent-green);
 }
 
 .result-unresolved-region {
