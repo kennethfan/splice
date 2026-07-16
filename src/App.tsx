@@ -1,6 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import "./styles/splice.css";
-import { ConflictBlock } from "./components/ConflictBlock";
 import { StatusBar } from "./components/StatusBar";
 import { MagicMergeDialog } from "./components/MagicMergeDialog";
 import { ConflictOverview } from "./components/ConflictOverview";
@@ -72,11 +71,18 @@ function App() {
   activeTabIndexRef.current = activeTabIndex;
   // Ref to prevent double-loading in React StrictMode
   const initialSessionLoadedRef = useRef(false);
+  // Track which side has been used for each conflict (one click per side)
+  const usedSides = useRef<Set<string>>(new Set());
 
   // Active tab / session helpers
   const activeTab = tabs[activeTabIndex] ?? null;
   const session = activeTab?.session ?? null;
   const activeFilePath = activeTab?.filePath ?? "";
+
+  // Reset usedSides when switching to a different file
+  useEffect(() => {
+    usedSides.current.clear();
+  }, [activeFilePath]);
 
   const debugInfo = session ? {
     localLen: session.all_local_content?.length ?? 0,
@@ -114,7 +120,7 @@ function App() {
   );
 
   // Fetch word-level diffs for the active session
-  const { diffs, getDiffForBlock } = useBlockDiffs(
+  const { diffs } = useBlockDiffs(
     activeFilePath,
     session?.conflicts.length ?? 0,
   );
@@ -251,6 +257,7 @@ function App() {
         updateActiveSession(updated);
       } catch (err) {
         setError(String(err));
+        throw err; // re-throw so callers (e.g. side pane buttons) know it failed
       }
     },
     [session, activeFilePath, updateActiveSession]
@@ -712,102 +719,16 @@ function App() {
     onToggleDebug: handleToggleDebug,
   });
 
-  /**
-   * Build two Sets of indices — one for all_local_content and one for
-   * all_remote_content — that mark which lines belong to conflict blocks.
-   * Used to apply correct conflict highlighting in the side panels.
-   *
-   * The algorithm walks through original_content (with conflict markers):
-   * - Non-conflict lines appear 1:1 in both local_content and remote_content
-   * - Conflict start markers map to local_lines / remote_lines respectively
-   * - Marker / separator lines are skipped (not in either extracted content)
-   */
-  const computeConflictIndices = useMemo(() => {
-    if (!session) return { local: new Set<number>(), remote: new Set<number>() };
-    const sorted = [...session.conflicts].sort((a, b) => a.start_line - b.start_line);
-    const originalLines = session.original_content.split("\n");
-    const localIndices = new Set<number>();
-    const remoteIndices = new Set<number>();
-    let conflictIdx = 0;
-    let localIdx = 0;
-    let remoteIdx = 0;
-
-    for (let i = 0; i < originalLines.length; i++) {
-      const lineNum = i + 1;
-      const nextConflict = sorted[conflictIdx];
-
-      if (nextConflict && lineNum === nextConflict.start_line) {
-        // Mark local lines
-        for (let j = 0; j < nextConflict.local_lines.length; j++) {
-          localIndices.add(localIdx + j);
-        }
-        localIdx += nextConflict.local_lines.length;
-
-        // Mark remote lines
-        for (let j = 0; j < nextConflict.remote_lines.length; j++) {
-          remoteIndices.add(remoteIdx + j);
-        }
-        remoteIdx += nextConflict.remote_lines.length;
-
-        conflictIdx += 1;
-        i = nextConflict.end_line; // skip to end of conflict
-        continue;
-      }
-
-      // Check if this original line is inside any conflict range
-      if (sorted.some((c) => lineNum >= c.start_line && lineNum <= c.end_line)) {
-        continue; // skip marker/remote/base content
-      }
-
-      // Normal line (appears in both original and all_local/remote_content)
-      localIdx += 1;
-      remoteIdx += 1;
-    }
-
-    return { local: localIndices, remote: remoteIndices };
-  }, [session?.original_content, session?.conflicts]);
-
-  // Render side pane (LOCAL or REMOTE) with conflict highlighting
-  const renderSidePane = (content: string, highlightedLines: string[], conflictIndices: Set<number>) => {
+  // Render side pane (LOCAL or REMOTE) with conflict action buttons (>> accept, X ignore)
+  // Inspired by IntelliJ IDEA's merge layout
+  const renderSidePaneWithActions = (side: 'local' | 'remote') => {
     if (!session) return null;
 
-    const lines = content.split("\n");
-    return (
-      <div className="pane-lines">
-        {lines.map((_line, i) => {
-          const inConflict = conflictIndices.has(i);
-          let lineClass = "pane-line";
-          if (inConflict) {
-            lineClass += " pane-line--conflict";
-          }
-
-          const highlightedHtml = highlightedLines[i] ?? "";
-          return (
-            <div key={i} className={lineClass}>
-              <span className="line-number">{i + 1}</span>
-              <span
-                className="line-text"
-                dangerouslySetInnerHTML={{
-                  __html: highlightedHtml || " ",
-                }}
-              />
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  // Render result content
-  const renderResultContent = () => {
-    if (!session) return null;
-
-    const originalLines = session.original_content.split("\n");
-    const result: React.ReactNode[] = [];
-
+    const content = side === 'local' ? session.all_local_content : session.all_remote_content;
+    const highlighted = side === 'local' ? highlightedLocal : highlightedRemote;
+    const contentLines = content.split('\n');
+    const originalLines = session.original_content.split('\n');
     const sortedConflicts = [...session.conflicts].sort((a, b) => a.start_line - b.start_line);
-    let conflictIdx = 0;
-    let highlightedIdx = 0; // index into highlightedLocal for normal line syntax highlighting
 
     // Build a Set of original line numbers that belong to any conflict
     const conflictRanges = new Set<number>();
@@ -817,45 +738,237 @@ function App() {
       }
     }
 
+    const result: React.ReactNode[] = [];
+    let conflictIdx = 0;
+    let contentIdx = 0;
+
+    for (let i = 0; i < originalLines.length; i++) {
+      const lineNum = i + 1;
+      const nextConflict = sortedConflicts[conflictIdx];
+      const sideLineCount = side === 'local'
+        ? nextConflict?.local_lines.length ?? 0
+        : nextConflict?.remote_lines.length ?? 0;
+
+      if (nextConflict && lineNum === nextConflict.start_line) {
+        const sideLines = side === 'local' ? nextConflict.local_lines : nextConflict.remote_lines;
+        const status = nextConflict.status;
+        const sideKey = `${side}-${nextConflict.id}`;
+
+        // Track which sides have already been used (one click per side per conflict)
+        const sideUsed = usedSides.current.has(sideKey);
+        const otherKey = side === 'local' ? `remote-${nextConflict.id}` : `local-${nextConflict.id}`;
+        const otherUsed = usedSides.current.has(otherKey);
+
+        // Show buttons if this side hasn't been used yet AND
+        // (conflict is still unresolved OR the other side already chose)
+        const canActNow = !sideUsed && (status === 'Unresolved' || otherUsed);
+
+        const handleAccept = async () => {
+          try {
+            if (side === 'local') {
+              if (status === 'Unresolved') await handleResolve(nextConflict.id, 'Local');
+              else if (status === 'ResolvedWithRemote') await handleResolve(nextConflict.id, 'Both');
+            } else {
+              if (status === 'Unresolved') await handleResolve(nextConflict.id, 'Remote');
+              else if (status === 'ResolvedWithLocal') await handleResolve(nextConflict.id, 'Both');
+            }
+            usedSides.current.add(sideKey);
+          } catch {
+            // Don't mark as used on error
+          }
+        };
+
+        const handleIgnore = async () => {
+          try {
+            if (side === 'local') {
+              if (status === 'Unresolved') await handleResolve(nextConflict.id, 'Remote');
+              else if (status === 'ResolvedWithLocal') await handleResolve(nextConflict.id, 'Remote');
+              else if (status === 'ResolvedWithBoth') await handleResolve(nextConflict.id, 'Remote');
+            } else {
+              if (status === 'Unresolved') await handleResolve(nextConflict.id, 'Local');
+              else if (status === 'ResolvedWithRemote') await handleResolve(nextConflict.id, 'Local');
+              else if (status === 'ResolvedWithBoth') await handleResolve(nextConflict.id, 'Local');
+            }
+            usedSides.current.add(sideKey);
+          } catch {
+            // Don't mark as used on error
+          }
+        };
+
+        result.push(
+          <div
+            key={`conflict-${side}-${nextConflict.id}`}
+            className={`conflict-side-block ${sideUsed ? 'conflict-side-block--used' : ''}`}
+            data-conflict-id={nextConflict.id}
+          >
+            <div className="conflict-side-lines">
+              {sideLines.length > 0 ? (
+                sideLines.map((line, li) => (
+                  <div key={li} className="conflict-side-line">
+                    <span className="line-number conflict-side-line-num">{contentIdx + li + 1}</span>
+                    <span className="conflict-side-line-text">{line}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="conflict-side-line conflict-side-line--empty">
+                  <span className="line-number conflict-side-line-num">{contentIdx + 1}</span>
+                  <span className="conflict-side-line-text">(empty)</span>
+                </div>
+              )}
+            </div>
+            {canActNow && (
+              <div className="conflict-side-buttons conflict-side-buttons--grouped">
+                <button
+                  type="button"
+                  className="conflict-side-btn conflict-side-btn--accept"
+                  onClick={handleAccept}
+                  title={`Accept ${side === 'local' ? 'your' : 'their'} version`}
+                >
+                  {side === 'local' ? '>>' : '<<'}
+                </button>
+                <button
+                  type="button"
+                  className="conflict-side-btn conflict-side-btn--ignore"
+                  onClick={handleIgnore}
+                  title={`Ignore ${side === 'local' ? 'your' : 'their'} version, use the other side`}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+        );
+
+        conflictIdx += 1;
+        contentIdx += sideLineCount;
+        i = nextConflict.end_line;
+        continue;
+      }
+
+      // Skip lines inside conflict markers in original content
+      if (conflictRanges.has(lineNum)) {
+        continue;
+      }
+
+      // Normal line (outside all conflicts)
+      if (contentIdx < contentLines.length) {
+        const safeIdx = Math.min(contentIdx, highlighted.length - 1);
+        const highlightedHtml = safeIdx >= 0 ? (highlighted[safeIdx] ?? '') : '';
+        result.push(
+          <div key={`line-${side}-${contentIdx}`} className="pane-line pane-line--normal">
+            <span className="line-number">{contentIdx + 1}</span>
+            <span
+              className="line-text"
+              dangerouslySetInnerHTML={{
+                __html: highlightedHtml || ' ',
+              }}
+            />
+          </div>
+        );
+        contentIdx++;
+      }
+    }
+
+    return <div className="pane-lines">{result}</div>;
+  };
+
+  // Render result content — shows the merged RESULT
+  // Unresolved conflicts show original content with markers;
+  // resolved conflicts show the resolved version
+  const renderResultContent = () => {
+    if (!session) return null;
+
+    const originalLines = session.original_content.split("\n");
+    const sortedConflicts = [...session.conflicts].sort((a, b) => a.start_line - b.start_line);
+
+    // Build a Set of original line numbers that belong to any conflict
+    const conflictRanges = new Set<number>();
+    for (const c of sortedConflicts) {
+      for (let ln = c.start_line; ln <= c.end_line; ln++) {
+        conflictRanges.add(ln);
+      }
+    }
+
+    const result: React.ReactNode[] = [];
+    let lineIdx = 0;
+    let conflictIdx = 0;
     let i = 0;
+
     while (i < originalLines.length) {
       const lineNum = i + 1;
       const nextConflict = sortedConflicts[conflictIdx];
 
       if (nextConflict && lineNum === nextConflict.start_line) {
-        const globalIndex = session.conflicts.findIndex((c) => c.id === nextConflict.id);
-        const blockIndex = session.conflicts.findIndex((c) => c.id === nextConflict.id);
-        result.push(
-          <ConflictBlock
-            key={`conflict-${nextConflict.id}`}
-            block={nextConflict}
-            isActive={nextConflict.id === currentConflictId}
-            index={globalIndex + 1}
-            total={session.conflicts.length}
-            onResolve={handleResolve}
-            blockDiff={getDiffForBlock(blockIndex)}
-          />
-        );
+        const isResolved = nextConflict.status !== "Unresolved";
+
+        if (isResolved) {
+          // Resolved — show the chosen version
+          let resolvedLines: string[];
+          switch (nextConflict.status) {
+            case "ResolvedWithLocal":
+              resolvedLines = nextConflict.local_lines;
+              break;
+            case "ResolvedWithRemote":
+              resolvedLines = nextConflict.remote_lines;
+              break;
+            case "ResolvedWithBoth":
+              resolvedLines = [...nextConflict.local_lines, ...nextConflict.remote_lines];
+              break;
+            default:
+              resolvedLines = nextConflict.local_lines;
+          }
+
+          result.push(
+            <div key={`conflict-${nextConflict.id}`} className="result-resolved-region">
+              {resolvedLines.map((line, li) => (
+                <div key={li} className="pane-line pane-line--resolved">
+                  <span className="line-number">{lineIdx + li + 1}</span>
+                  <span className="line-text">{line}</span>
+                </div>
+              ))}
+            </div>
+          );
+          lineIdx += resolvedLines.length;
+        } else {
+          // Unresolved — show original conflict markers as code
+          result.push(
+            <div key={`conflict-${nextConflict.id}`} className="result-unresolved-region">
+              <div className="result-unresolved-label">&lt;&lt;&lt;&lt;&lt;&lt;&lt; Yours</div>
+              {nextConflict.local_lines.map((line, li) => (
+                <div key={`local-${li}`} className="pane-line pane-line--conflict">
+                  <span className="line-number">{lineIdx + li + 1}</span>
+                  <span className="line-text">{line}</span>
+                </div>
+              ))}
+              <div className="result-unresolved-sep">=======</div>
+              {nextConflict.remote_lines.map((line, li) => (
+                <div key={`remote-${li}`} className="pane-line pane-line--conflict">
+                  <span className="line-number">{lineIdx + nextConflict.local_lines.length + li + 1}</span>
+                  <span className="line-text">{line}</span>
+                </div>
+              ))}
+              <div className="result-unresolved-label">&gt;&gt;&gt;&gt;&gt;&gt;&gt; Theirs</div>
+            </div>
+          );
+          lineIdx += nextConflict.local_lines.length + nextConflict.remote_lines.length;
+        }
+
         conflictIdx += 1;
-        // Skip this conflict's LOCAL lines from all_local_content
-        // (they are not rendered as normal lines)
-        highlightedIdx += nextConflict.local_lines.length;
-        // Jump to the line AFTER the conflict's >>>>>>> marker
         i = nextConflict.end_line;
         continue;
       }
 
-      // Skip lines that are inside any conflict (markers, base, remote content)
+      // Skip lines inside conflict markers (in original content)
       if (conflictRanges.has(lineNum)) {
         i++;
         continue;
       }
 
-      // Normal line (outside all conflicts) — render with syntax highlighting
-      const highlightedHtml = highlightedLocal[highlightedIdx] ?? "";
+      // Normal line — render with syntax highlighting
+      const highlightedHtml = highlightedLocal[lineIdx] ?? "";
       result.push(
-        <div key={`line-${highlightedIdx}`} className="pane-line pane-line--normal">
-          <span className="line-number">{highlightedIdx + 1}</span>
+        <div key={`line-${i}`} className="pane-line pane-line--normal">
+          <span className="line-number">{lineIdx + 1}</span>
           <span
             className="line-text"
             dangerouslySetInnerHTML={{
@@ -864,7 +977,7 @@ function App() {
           />
         </div>
       );
-      highlightedIdx++;
+      lineIdx++;
       i++;
     }
 
@@ -958,12 +1071,13 @@ function App() {
         {/* LOCAL */}
         <div
           className="pane pane-side"
+          data-side="local"
           ref={refs.left}
           onScroll={() => handleScroll("left")}
         >
-          <div className="pane-header">Local (Yours)</div>
+          <div className="pane-header">Yours (Current)</div>
           {session ? (
-            renderSidePane(session.all_local_content, highlightedLocal, computeConflictIndices.local)
+            renderSidePaneWithActions('local')
           ) : (
             <div className="pane-content pane-placeholder">
               <div className="placeholder-icon">📂</div>
@@ -1007,12 +1121,13 @@ function App() {
         {/* REMOTE */}
         <div
           className="pane pane-side"
+          data-side="remote"
           ref={refs.right}
           onScroll={() => handleScroll("right")}
         >
-          <div className="pane-header">Remote (Theirs)</div>
+          <div className="pane-header">Theirs (Merged)</div>
           {session ? (
-            renderSidePane(session.all_remote_content, highlightedRemote, computeConflictIndices.remote)
+            renderSidePaneWithActions('remote')
           ) : (
             <div className="pane-content pane-placeholder">
               <div className="placeholder-icon">📂</div>

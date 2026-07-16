@@ -203,7 +203,13 @@ html, body, #root {
 }
 
 .pane-line--resolved {
-    opacity: 0.5;
+    background: rgba(86, 211, 100, 0.08);
+    border-left: 3px solid rgba(86, 211, 100, 0.4);
+}
+
+.pane-line--resolved:hover {
+    background: rgba(86, 211, 100, 0.15);
+    border-left-color: var(--accent-green);
 }
 
 .pane-line--conflict {
@@ -1852,6 +1858,218 @@ html, body, #root {
 .conflict-btn--hovered {
     filter: brightness(1.4);
 }
+
+/* === Side Pane Conflict Action Blocks (>> / X buttons) === */
+
+.conflict-side-block {
+    display: flex;
+    align-items: stretch;
+    margin: 2px 0;
+    padding: 2px 8px;
+    position: relative;
+}
+
+/* Right pane: buttons on the LEFT (near center) */
+.pane-side[data-side="remote"] .conflict-side-block {
+    flex-direction: row-reverse;
+}
+
+.pane-side[data-side="local"] .conflict-side-block {
+    border-left: 3px solid rgba(255, 107, 107, 0.5);
+    background: rgba(255, 107, 107, 0.1);
+}
+
+.pane-side[data-side="remote"] .conflict-side-block {
+    border-left: 3px solid rgba(86, 211, 100, 0.5);
+    background: rgba(86, 211, 100, 0.1);
+}
+
+.conflict-side-lines {
+    flex: 1;
+    min-width: 0;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.conflict-side-line {
+    display: flex;
+    align-items: center;
+    min-height: 18px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* Left pane: line numbers on the RIGHT (near center) */
+.pane-side[data-side="local"] .conflict-side-line {
+    flex-direction: row-reverse;
+}
+
+.conflict-side-line:nth-child(even) {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.conflict-side-line--empty {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.conflict-side-line-num {
+    width: 36px;
+    flex-shrink: 0;
+    text-align: right;
+    padding-right: 10px;
+    color: var(--text-muted);
+    font-size: 10px;
+    user-select: none;
+    opacity: 0.6;
+}
+
+/* Left pane: line number text alignment on the right */
+.pane-side[data-side="local"] .conflict-side-line-num {
+    text-align: left;
+    padding-right: 0;
+    padding-left: 10px;
+}
+
+.conflict-side-line-text {
+    flex: 1;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.conflict-side-buttons {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: 2px 0;
+    flex-shrink: 0;
+}
+
+/* Left pane: buttons padding on the left side */
+.pane-side[data-side="local"] .conflict-side-buttons {
+    padding-left: 6px;
+}
+
+/* Right pane: buttons padding on the right side (due to row-reverse) */
+.pane-side[data-side="remote"] .conflict-side-buttons {
+    padding-right: 6px;
+}
+
+.conflict-side-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 24px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 120ms ease;
+    line-height: 1;
+    padding: 0;
+    user-select: none;
+}
+
+.conflict-side-btn:hover {
+    filter: brightness(1.4);
+    transform: scale(1.08);
+}
+
+.conflict-side-btn:active {
+    transform: scale(0.93);
+    filter: brightness(0.9);
+}
+
+.conflict-side-btn--accept {
+    color: var(--accent-green);
+    border-color: rgba(86, 211, 100, 0.4);
+    background: rgba(86, 211, 100, 0.08);
+}
+
+.conflict-side-btn--accept:hover {
+    background: rgba(86, 211, 100, 0.2);
+    border-color: var(--accent-green);
+}
+
+.conflict-side-btn--ignore {
+    color: var(--accent-red);
+    border-color: rgba(255, 107, 107, 0.35);
+    font-size: 11px;
+    background: rgba(255, 107, 107, 0.08);
+}
+
+.conflict-side-btn--ignore:hover {
+    background: rgba(255, 107, 107, 0.18);
+    border-color: var(--accent-red);
+}
+
+.conflict-side-block--used {
+    opacity: 0.7;
+}
+
+.conflict-side-buttons--grouped {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* === Result Pane (merged RESULT view) === */
+
+.result-resolved-region .pane-line--resolved {
+    background: rgba(86, 211, 100, 0.08);
+    border-left: 3px solid rgba(86, 211, 100, 0.4);
+}
+
+.result-unresolved-region {
+    position: relative;
+}
+
+.result-unresolved-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 8px 1px 40px;
+    color: var(--text-muted);
+    background: rgba(255, 107, 107, 0.08);
+    border-bottom: 1px solid rgba(255, 107, 107, 0.15);
+    user-select: none;
+}
+
+.result-unresolved-sep {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 8px 1px 40px;
+    color: var(--text-muted);
+    background: rgba(227, 205, 73, 0.08);
+    border-top: 1px solid rgba(255, 107, 107, 0.15);
+    border-bottom: 1px solid rgba(86, 211, 100, 0.15);
+    user-select: none;
+}
+
+.result-unresolved-region .pane-line--conflict {
+    background: rgba(255, 107, 107, 0.08);
+    border-left: 3px solid rgba(255, 107, 107, 0.4);
+}
+
+/* Left pane: normal lines flipped (line numbers on right) */
+.pane-side[data-side="local"] .pane-line {
+    flex-direction: row-reverse;
+}
+
+.pane-side[data-side="local"] .line-number {
+    text-align: left;
+    padding-right: 0;
+    padding-left: 8px;
+}
+
+
 
 /* === Tab Bar === */
 
