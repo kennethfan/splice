@@ -2058,6 +2058,43 @@ html, body, #root {
     border-left: 3px solid rgba(255, 107, 107, 0.4);
 }
 
+/* Manual edit button inside unresolved conflict region */
+.result-unresolved-actions {
+    display: flex;
+    padding: 3px 8px 3px 40px;
+    background: rgba(188, 140, 255, 0.04);
+    border-top: 1px solid rgba(188, 140, 255, 0.1);
+    gap: 6px;
+}
+
+.result-manual-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border: 1px solid rgba(188, 140, 255, 0.3);
+    border-radius: var(--radius-sm);
+    background: rgba(188, 140, 255, 0.08);
+    color: var(--accent-purple);
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 120ms ease;
+    user-select: none;
+    line-height: 1.4;
+}
+
+.result-manual-btn:hover {
+    background: rgba(188, 140, 255, 0.18);
+    border-color: var(--accent-purple);
+    transform: scale(1.02);
+}
+
+.result-manual-btn:active {
+    transform: scale(0.96);
+}
+
 /* Left pane: normal lines flipped (line numbers on right) */
 .pane-side[data-side="local"] .pane-line {
     flex-direction: row-reverse;

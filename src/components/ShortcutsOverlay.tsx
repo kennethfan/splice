@@ -19,6 +19,7 @@ const GROUPS: ShortcutGroup[] = [
       { keys: "Cmd + ;", label: "Accept both versions" },
       { keys: "Cmd + .", label: "Accept remote (theirs)" },
       { keys: "Cmd + M", label: "Magic Merge (auto-resolve)" },
+      { keys: "Cmd + E", label: "Open manual edit for current conflict" },
       { keys: "Cmd + \\", label: "Toggle base panel" },
     ],
   },

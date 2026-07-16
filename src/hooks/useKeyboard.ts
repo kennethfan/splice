@@ -15,6 +15,7 @@ export interface KeyboardHandlers {
   onOpenOverview: () => void;
   onCloseTab: () => void;
   onToggleDebug?: () => void;
+  onManualEdit?: () => void;
 }
 
 /**
@@ -86,6 +87,10 @@ export function useKeyboard(handlers: KeyboardHandlers) {
               e.preventDefault();
               handlers.onToggleDebug?.();
             }
+            break;
+          case "e":
+            e.preventDefault();
+            handlers.onManualEdit?.();
             break;
         }
       } else {

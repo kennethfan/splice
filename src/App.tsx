@@ -3,6 +3,7 @@ import "./styles/splice.css";
 import { StatusBar } from "./components/StatusBar";
 import { MagicMergeDialog } from "./components/MagicMergeDialog";
 import { ConflictOverview } from "./components/ConflictOverview";
+import { ManualResolveDialog } from "./components/ManualResolveDialog";
 import { BasePane } from "./components/BasePane";
 import { TabBar } from "./components/TabBar";
 import { WatchedRepoPanel } from "./components/WatchedRepoPanel";
@@ -10,7 +11,7 @@ import { ShortcutsOverlay } from "./components/ShortcutsOverlay";
 import { useSyncScroll } from "./hooks/useSyncScroll";
 import { useKeyboard } from "./hooks/useKeyboard";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { MergeSession, ResolveAction } from "./lib/tauri";
+import type { MergeSession, ResolveAction, ConflictBlock } from "./lib/tauri";
 import {
   openFile as openFileViaTauri,
   resolveConflict,
@@ -65,6 +66,7 @@ function App() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [isMergetoolMode, setIsMergetoolMode] = useState(false);
+  const [manualEditConflict, setManualEditConflict] = useState<ConflictBlock | null>(null);
 
   // Ref to avoid stale activeTabIndex in async callbacks
   const activeTabIndexRef = useRef(activeTabIndex);
@@ -79,9 +81,10 @@ function App() {
   const session = activeTab?.session ?? null;
   const activeFilePath = activeTab?.filePath ?? "";
 
-  // Reset usedSides when switching to a different file
+  // Reset usedSides and close manual dialog when switching to a different file
   useEffect(() => {
     usedSides.current.clear();
+    setManualEditConflict(null);
   }, [activeFilePath]);
 
   const debugInfo = session ? {
@@ -627,6 +630,32 @@ function App() {
     }
   }, [tabs.length, activeTabIndex, handleCloseTab]);
 
+  // Open manual resolution dialog for a specific conflict
+  const handleOpenManualEdit = useCallback((conflict: ConflictBlock) => {
+    setManualEditConflict(conflict);
+  }, []);
+
+  // Handle manual resolution confirmation
+  const handleManualConfirm = useCallback(
+    async (content: string) => {
+      if (!manualEditConflict) return;
+      const id = manualEditConflict.id;
+      try {
+        await handleResolve(id, { Manual: content });
+        handleNextConflict();
+        // Only close dialog after successful resolve
+        setManualEditConflict(null);
+      } catch {
+        // Error already handled by handleResolve — keep dialog open so user can retry
+      }
+    },
+    [manualEditConflict, handleResolve, handleNextConflict]
+  );
+
+  const handleCloseManualEdit = useCallback(() => {
+    setManualEditConflict(null);
+  }, []);
+
   // Counter to force scroll effect even when currentConflictId doesn't change
   const [scrollCounter, setScrollCounter] = useState(0);
 
@@ -717,6 +746,14 @@ function App() {
     onOpenOverview: handleOpenOverview,
     onCloseTab: handleCloseActiveTab,
     onToggleDebug: handleToggleDebug,
+    onManualEdit: () => {
+      if (currentConflictId > 0 && session) {
+        const conflict = session.conflicts.find(c => c.id === currentConflictId);
+        if (conflict && conflict.status === 'Unresolved') {
+          handleOpenManualEdit(conflict);
+        }
+      }
+    },
   });
 
   // Render side pane (LOCAL or REMOTE) with conflict action buttons (>> accept, X ignore)
@@ -948,6 +985,16 @@ function App() {
                 </div>
               ))}
               <div className="result-unresolved-label">&gt;&gt;&gt;&gt;&gt;&gt;&gt; Theirs</div>
+              <div className="result-unresolved-actions">
+                <button
+                  type="button"
+                  className="result-manual-btn"
+                  onClick={() => handleOpenManualEdit(nextConflict)}
+                  title="Manually edit the resolved content"
+                >
+                  ✏ Manual Edit
+                </button>
+              </div>
             </div>
           );
           lineIdx += nextConflict.local_lines.length + nextConflict.remote_lines.length;
@@ -1179,6 +1226,15 @@ function App() {
         highlightedFiles={highlightedFiles}
         onSetHighlightedFiles={setHighlightedFiles}
       />
+
+      {/* Manual Resolution Dialog */}
+      {manualEditConflict && (
+        <ManualResolveDialog
+          block={manualEditConflict}
+          onConfirm={handleManualConfirm}
+          onCancel={handleCloseManualEdit}
+        />
+      )}
 
       {/* Shortcuts Help Overlay */}
       <ShortcutsOverlay
