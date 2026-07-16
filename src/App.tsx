@@ -774,24 +774,24 @@ function App() {
         // during the animation that would trigger cascading syncs.
         el.scrollIntoView({ behavior: "auto", block: "center" });
 
-        // Sync side panes to match the result pane's scroll position
+        // Sync side panes to the SAME conflict using data-conflict-id,
+        // so all three panes show the same conflict region in view.
+        // This is more precise than proportional scroll sync because
+        // the result and side panes have different content heights
+        // (resolved content is shorter than original with markers).
         requestAnimationFrame(() => {
-          const centerRatio = pane.scrollHeight > pane.clientHeight
-            ? pane.scrollTop / (pane.scrollHeight - pane.clientHeight)
-            : 0;
-
-          const syncPane = (sideRef: React.RefObject<HTMLDivElement | null>) => {
-            const el = sideRef.current;
-            if (!el) return;
-            const maxScroll = el.scrollHeight - el.clientHeight;
-            if (maxScroll > 0) {
-              el.scrollTop = centerRatio * maxScroll;
+          const syncToConflict = (sideRef: React.RefObject<HTMLDivElement | null>) => {
+            const sidePane = sideRef.current;
+            if (!sidePane) return;
+            const conflictEl = sidePane.querySelector(`[data-conflict-id="${targetId}"]`);
+            if (conflictEl) {
+              conflictEl.scrollIntoView({ behavior: "auto", block: "center" });
             }
           };
 
-          syncPane(refs.left);
-          syncPane(refs.right);
-          if (refs.base.current) syncPane(refs.base);
+          syncToConflict(refs.left);
+          syncToConflict(refs.right);
+          if (refs.base.current) syncToConflict(refs.base);
 
           // Clear guard after syncing so user-initiated scroll events work
           requestAnimationFrame(() => {
