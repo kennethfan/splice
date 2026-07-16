@@ -688,20 +688,23 @@ function App() {
     setInlineEditId(conflict.id);
   }, []);
 
-  // Confirm inline edit — resolve with the custom content
+  // Confirm inline edit — resolve with the custom content.
+  // Reads from inlineEditTextRef instead of inlineEditText state to avoid
+  // stale closure issues in useCallback.
   const handleInlineConfirm = useCallback(
-    async (conflictId: number) => {
-      if (!inlineEditText.trim()) return;
+    async (conflictId: number, advanceNext = true) => {
+      const text = inlineEditTextRef.current;
+      if (!text.trim()) return;
       try {
-        await handleResolve(conflictId, { Manual: inlineEditText });
+        await handleResolve(conflictId, { Manual: text });
         setInlineEditId(null);
         setInlineEditText("");
-        handleNextConflict();
+        if (advanceNext) handleNextConflict();
       } catch {
         // Error already handled by handleResolve — keep editor open for retry
       }
     },
-    [inlineEditText, handleResolve, handleNextConflict]
+    [handleResolve, handleNextConflict] // No inlineEditText dep needed — uses ref
   );
 
   // Cancel inline editing — restore the original view
@@ -709,6 +712,15 @@ function App() {
     setInlineEditId(null);
     setInlineEditText("");
   }, []);
+
+  // Ref for auto-focusing the resolved editor textarea
+  const resolvedEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  // Ref that always mirrors inlineEditText to avoid stale closure in handleInlineConfirm
+  const inlineEditTextRef = useRef(inlineEditText);
+  inlineEditTextRef.current = inlineEditText;
+  useEffect(() => {
+    if (inlineEditId) resolvedEditorRef.current?.focus();
+  }, [inlineEditId]);
 
   // Counter to force scroll effect even when currentConflictId doesn't change
   const [scrollCounter, setScrollCounter] = useState(0);
@@ -1127,7 +1139,12 @@ function App() {
               resolvedLines = [...nextConflict.local_lines, ...nextConflict.remote_lines];
               break;
             default:
-              resolvedLines = nextConflict.local_lines;
+              // ResolvedManual — extract stored manual text
+              if (typeof nextConflict.status === 'object' && 'ResolvedManual' in nextConflict.status) {
+                resolvedLines = nextConflict.status.ResolvedManual.split('\n');
+              } else {
+                resolvedLines = nextConflict.local_lines;
+              }
           }
 
           {
@@ -1155,18 +1172,19 @@ function App() {
                   )}
                 </div>
                 {isEditing ? (
-                  <div className="inline-editor">
-                    <div className="inline-editor-label">
-                      ✏ Editing resolved content for conflict #{nextConflict.id}
-                    </div>
-                    <textarea
-                      className="inline-editor-textarea"
+                  <div className="result-resolved-editing">                      <textarea
+                      className="result-resolved-editor"
                       value={inlineEditText}
-                      onChange={(e) => setInlineEditText(e.target.value)}
+                      onChange={(e) => {
+                        setInlineEditText(e.target.value);
+                        // Auto-grow height to fit content
+                        e.currentTarget.style.height = 'auto';
+                        e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px';
+                      }}
                       onKeyDown={(e) => {
                         if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                           e.preventDefault();
-                          handleInlineConfirm(nextConflict.id);
+                          handleInlineConfirm(nextConflict.id, false);
                         }
                         if (e.key === "Escape") {
                           e.preventDefault();
@@ -1174,33 +1192,33 @@ function App() {
                         }
                       }}
                       spellCheck={false}
-                      autoFocus
-                      placeholder="Edit the resolved content here..."
+                      placeholder="Edit the resolved content..."
+                      ref={(el) => {
+                        resolvedEditorRef.current = el;
+                        if (el) {
+                          el.style.height = 'auto';
+                          el.style.height = el.scrollHeight + 'px';
+                        }
+                      }}
                     />
-                    {inlineEditText.trim() && (
-                      <InlinePreview
-                        content={inlineEditText}
-                        fileExtension={session.file_extension}
-                      />
-                    )}
-                    <div className="inline-editor-actions">
+                    <div className="result-resolved-edit-actions">
                       <button
                         type="button"
-                        className="inline-editor-btn inline-editor-btn--cancel"
+                        className="result-resolved-edit-act-btn result-resolved-edit-act-btn--cancel"
                         onClick={handleInlineCancel}
                       >
                         ✕ Cancel
                       </button>
-                      <span className="inline-editor-hint">
-                        {navigator.platform.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to confirm
+                      <span className="result-resolved-edit-hint">
+                        Esc cancel · Cmd+Enter save
                       </span>
                       <button
                         type="button"
-                        className="inline-editor-btn inline-editor-btn--apply"
-                        onClick={() => handleInlineConfirm(nextConflict.id)}
+                        className="result-resolved-edit-act-btn result-resolved-edit-act-btn--save"
+                        onClick={() => handleInlineConfirm(nextConflict.id, false)}
                         disabled={!inlineEditText.trim()}
                       >
-                        ✓ Apply
+                        ✓ Save
                       </button>
                     </div>
                   </div>
@@ -1229,14 +1247,19 @@ function App() {
           result.push(
             <div key={`conflict-${nextConflict.id}`} className={`result-unresolved-region ${highlightedConflictId === nextConflict.id ? 'result-region--highlighted' : ''}`} data-conflict-id={nextConflict.id}>
               {isEditing ? (
-                <div className="inline-editor">
-                  <div className="inline-editor-label">
+                <div className="result-resolved-editing">
+                  <div className="result-resolved-editor-label">
                     ✏ Editing merged content for conflict #{nextConflict.id}
                   </div>
                   <textarea
-                    className="inline-editor-textarea"
+                    className="result-resolved-editor"
                     value={inlineEditText}
-                    onChange={(e) => setInlineEditText(e.target.value)}
+                    onChange={(e) => {
+                      setInlineEditText(e.target.value);
+                      // Auto-grow height to fit content
+                      e.currentTarget.style.height = 'auto';
+                      e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px';
+                    }}
                     onKeyDown={(e) => {
                       // Cmd+Enter to confirm
                       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -1250,8 +1273,14 @@ function App() {
                       }
                     }}
                     spellCheck={false}
-                    autoFocus
                     placeholder="Edit the merged content here..."
+                    ref={(el) => {
+                      if (el) {
+                        el.style.height = 'auto';
+                        el.style.height = el.scrollHeight + 'px';
+                        setTimeout(() => el.focus(), 0);
+                      }
+                    }}
                   />
                   {/* Live syntax-highlighted preview below the editor */}
                   {inlineEditText.trim() && (
@@ -1260,20 +1289,20 @@ function App() {
                       fileExtension={session.file_extension}
                     />
                   )}
-                  <div className="inline-editor-actions">
+                  <div className="result-resolved-edit-actions">
                     <button
                       type="button"
-                      className="inline-editor-btn inline-editor-btn--cancel"
+                      className="result-resolved-edit-act-btn result-resolved-edit-act-btn--cancel"
                       onClick={handleInlineCancel}
                     >
                       ✕ Cancel
                     </button>
-                    <span className="inline-editor-hint">
+                    <span className="result-resolved-edit-hint">
                       {navigator.platform.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to confirm
                     </span>
                     <button
                       type="button"
-                      className="inline-editor-btn inline-editor-btn--apply"
+                      className="result-resolved-edit-act-btn result-resolved-edit-act-btn--save"
                       onClick={() => handleInlineConfirm(nextConflict.id)}
                       disabled={!inlineEditText.trim()}
                     >
