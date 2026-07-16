@@ -3,7 +3,7 @@ import "./styles/splice.css";
 import { StatusBar } from "./components/StatusBar";
 import { MagicMergeDialog } from "./components/MagicMergeDialog";
 import { ConflictOverview } from "./components/ConflictOverview";
-import { ManualResolveDialog } from "./components/ManualResolveDialog";
+
 import { BasePane } from "./components/BasePane";
 import { TabBar } from "./components/TabBar";
 import { WatchedRepoPanel } from "./components/WatchedRepoPanel";
@@ -66,7 +66,9 @@ function App() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [isMergetoolMode, setIsMergetoolMode] = useState(false);
-  const [manualEditConflict, setManualEditConflict] = useState<ConflictBlock | null>(null);
+  // Track which conflict is currently being edited inline in the result pane
+  const [inlineEditId, setInlineEditId] = useState<number | null>(null);
+  const [inlineEditText, setInlineEditText] = useState("");
 
   // Ref to avoid stale activeTabIndex in async callbacks
   const activeTabIndexRef = useRef(activeTabIndex);
@@ -81,10 +83,11 @@ function App() {
   const session = activeTab?.session ?? null;
   const activeFilePath = activeTab?.filePath ?? "";
 
-  // Reset usedSides and close manual dialog when switching to a different file
+  // Reset usedSides and close inline editor when switching to a different file
   useEffect(() => {
     usedSides.current.clear();
-    setManualEditConflict(null);
+    setInlineEditId(null);
+    setInlineEditText("");
   }, [activeFilePath]);
 
   const debugInfo = session ? {
@@ -630,30 +633,38 @@ function App() {
     }
   }, [tabs.length, activeTabIndex, handleCloseTab]);
 
-  // Open manual resolution dialog for a specific conflict
-  const handleOpenManualEdit = useCallback((conflict: ConflictBlock) => {
-    setManualEditConflict(conflict);
+  // Start inline editing for a specific conflict
+  const handleStartInlineEdit = useCallback((conflict: ConflictBlock) => {
+    const combined = [
+      "// ─── Your version ───",
+      ...conflict.local_lines,
+      "// ─── Their version ───",
+      ...conflict.remote_lines,
+    ];
+    setInlineEditText(combined.join("\n"));
+    setInlineEditId(conflict.id);
   }, []);
 
-  // Handle manual resolution confirmation
-  const handleManualConfirm = useCallback(
-    async (content: string) => {
-      if (!manualEditConflict) return;
-      const id = manualEditConflict.id;
+  // Confirm inline edit — resolve with the custom content
+  const handleInlineConfirm = useCallback(
+    async (conflictId: number) => {
+      if (!inlineEditText.trim()) return;
       try {
-        await handleResolve(id, { Manual: content });
+        await handleResolve(conflictId, { Manual: inlineEditText });
+        setInlineEditId(null);
+        setInlineEditText("");
         handleNextConflict();
-        // Only close dialog after successful resolve
-        setManualEditConflict(null);
       } catch {
-        // Error already handled by handleResolve — keep dialog open so user can retry
+        // Error already handled by handleResolve — keep editor open for retry
       }
     },
-    [manualEditConflict, handleResolve, handleNextConflict]
+    [inlineEditText, handleResolve, handleNextConflict]
   );
 
-  const handleCloseManualEdit = useCallback(() => {
-    setManualEditConflict(null);
+  // Cancel inline editing — restore the original view
+  const handleInlineCancel = useCallback(() => {
+    setInlineEditId(null);
+    setInlineEditText("");
   }, []);
 
   // Counter to force scroll effect even when currentConflictId doesn't change
@@ -750,7 +761,7 @@ function App() {
       if (currentConflictId > 0 && session) {
         const conflict = session.conflicts.find(c => c.id === currentConflictId);
         if (conflict && conflict.status === 'Unresolved') {
-          handleOpenManualEdit(conflict);
+          handleStartInlineEdit(conflict);
         }
       }
     },
@@ -967,34 +978,86 @@ function App() {
           );
           lineIdx += resolvedLines.length;
         } else {
-          // Unresolved — show original conflict markers as code
+          // Unresolved — detect if this conflict is currently being edited inline
+          const isEditing = inlineEditId === nextConflict.id;
+
           result.push(
-            <div key={`conflict-${nextConflict.id}`} className="result-unresolved-region">
-              <div className="result-unresolved-label">&lt;&lt;&lt;&lt;&lt;&lt;&lt; Yours</div>
-              {nextConflict.local_lines.map((line, li) => (
-                <div key={`local-${li}`} className="pane-line pane-line--conflict">
-                  <span className="line-number">{lineIdx + li + 1}</span>
-                  <span className="line-text">{line}</span>
+            <div key={`conflict-${nextConflict.id}`} className="result-unresolved-region" data-conflict-id={nextConflict.id}>
+              {isEditing ? (
+                <div className="inline-editor">
+                  <div className="inline-editor-label">
+                    ✏ Editing merged content for conflict #{nextConflict.id}
+                  </div>
+                  <textarea
+                    className="inline-editor-textarea"
+                    value={inlineEditText}
+                    onChange={(e) => setInlineEditText(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Cmd+Enter to confirm
+                      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                        e.preventDefault();
+                        handleInlineConfirm(nextConflict.id);
+                      }
+                      // Escape to cancel
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        handleInlineCancel();
+                      }
+                    }}
+                    spellCheck={false}
+                    autoFocus
+                    placeholder="Edit the merged content here..."
+                  />
+                  <div className="inline-editor-actions">
+                    <button
+                      type="button"
+                      className="inline-editor-btn inline-editor-btn--cancel"
+                      onClick={handleInlineCancel}
+                    >
+                      ✕ Cancel
+                    </button>
+                    <span className="inline-editor-hint">
+                      {navigator.platform.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to confirm
+                    </span>
+                    <button
+                      type="button"
+                      className="inline-editor-btn inline-editor-btn--apply"
+                      onClick={() => handleInlineConfirm(nextConflict.id)}
+                      disabled={!inlineEditText.trim()}
+                    >
+                      ✓ Apply
+                    </button>
+                  </div>
                 </div>
-              ))}
-              <div className="result-unresolved-sep">=======</div>
-              {nextConflict.remote_lines.map((line, li) => (
-                <div key={`remote-${li}`} className="pane-line pane-line--conflict">
-                  <span className="line-number">{lineIdx + nextConflict.local_lines.length + li + 1}</span>
-                  <span className="line-text">{line}</span>
-                </div>
-              ))}
-              <div className="result-unresolved-label">&gt;&gt;&gt;&gt;&gt;&gt;&gt; Theirs</div>
-              <div className="result-unresolved-actions">
-                <button
-                  type="button"
-                  className="result-manual-btn"
-                  onClick={() => handleOpenManualEdit(nextConflict)}
-                  title="Manually edit the resolved content"
-                >
-                  ✏ Manual Edit
-                </button>
-              </div>
+              ) : (
+                <>
+                  <div className="result-unresolved-label">&lt;&lt;&lt;&lt;&lt;&lt;&lt; Yours</div>
+                  {nextConflict.local_lines.map((line, li) => (
+                    <div key={`local-${li}`} className="pane-line pane-line--conflict">
+                      <span className="line-number">{lineIdx + li + 1}</span>
+                      <span className="line-text">{line}</span>
+                    </div>
+                  ))}
+                  <div className="result-unresolved-sep">=======</div>
+                  {nextConflict.remote_lines.map((line, li) => (
+                    <div key={`remote-${li}`} className="pane-line pane-line--conflict">
+                      <span className="line-number">{lineIdx + nextConflict.local_lines.length + li + 1}</span>
+                      <span className="line-text">{line}</span>
+                    </div>
+                  ))}
+                  <div className="result-unresolved-label">&gt;&gt;&gt;&gt;&gt;&gt;&gt; Theirs</div>
+                  <div className="result-unresolved-actions">
+                    <button
+                      type="button"
+                      className="result-manual-btn"
+                      onClick={() => handleStartInlineEdit(nextConflict)}
+                      title="Edit the resolved content inline"
+                    >
+                      ✏ Edit Inline
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           );
           lineIdx += nextConflict.local_lines.length + nextConflict.remote_lines.length;
@@ -1226,15 +1289,6 @@ function App() {
         highlightedFiles={highlightedFiles}
         onSetHighlightedFiles={setHighlightedFiles}
       />
-
-      {/* Manual Resolution Dialog */}
-      {manualEditConflict && (
-        <ManualResolveDialog
-          block={manualEditConflict}
-          onConfirm={handleManualConfirm}
-          onCancel={handleCloseManualEdit}
-        />
-      )}
 
       {/* Shortcuts Help Overlay */}
       <ShortcutsOverlay
