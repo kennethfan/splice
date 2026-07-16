@@ -1,0 +1,100 @@
+# Splice — Release Workflow
+# Builds the macOS .app bundle and creates a GitHub Release when a tag
+# matching v*.*.* is pushed (e.g., v0.1.0, v0.2.0).
+#
+# Usage:
+#   1. Merge PR to master
+#   2. git tag v0.2.0
+#   3. git push origin v0.2.0
+#   4. Workflow builds and creates a draft release with .app + .dmg assets
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test:
+    name: Test
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Frontend tests
+        run: npx vitest run
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Rust tests
+        run: cargo test
+        working-directory: src-tauri
+
+  build-and-release:
+    name: Build and Release
+    needs: test
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # No separate frontend build needed — tauri-action runs it internally
+      # via beforeBuildCommand in tauri.conf.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and release with Tauri
+        uses: tauri-apps/tauri-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Splice v__VERSION__"
+          releaseBody: |
+            ## Splice v__VERSION__
+
+            ### What's Changed
+            See the [commit log](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for details.
+
+            ### Download
+            Download the `.app` bundle or `.dmg` disk image below for macOS.
+          releaseDraft: true
+          prerelease: false
