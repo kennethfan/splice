@@ -228,6 +228,7 @@ function App() {
       setTabs((prev) => [...prev, { filePath: selected, session: result }]);
       setActiveTabIndex(tabs.length);
       setActiveConflictIndex(0);
+      setScrollCounter((c) => c + 1); // force auto-scroll to first conflict
       // Auto-add the file's repo to the conflict watcher
       if (watcherRunning) {
         try {
@@ -540,6 +541,7 @@ function App() {
       setTabs((prev) => [...prev, { filePath, session: result }]);
       setActiveTabIndex(tabs.length);
       setActiveConflictIndex(0);
+      setScrollCounter((c) => c + 1); // force auto-scroll to first conflict
       setShowWatcherPanel(false);
     } catch (err) {
       setError(`⚠️ ${err}`);
@@ -586,6 +588,7 @@ function App() {
           setTabs((prev) => [...prev, { filePath: path, session }]);
           setActiveTabIndex(0);
           setActiveConflictIndex(0);
+          setScrollCounter((c) => c + 1); // force auto-scroll to first conflict
         }
       })
       .catch(() => {});
@@ -670,7 +673,8 @@ function App() {
   // Counter to force scroll effect even when currentConflictId doesn't change
   const [scrollCounter, setScrollCounter] = useState(0);
 
-  // Auto-scroll to the active conflict block in the result pane.
+  // Auto-scroll to the active conflict block in the result pane,
+  // and sync the side panes to the same proportional scroll position.
   // Uses programmaticScrollRef to prevent cascading feedback loops
   // with the pane scroll-sync mechanism.
   useEffect(() => {
@@ -686,14 +690,35 @@ function App() {
         // Use "auto" instead of "smooth" to avoid trailing scroll events
         // during the animation that would trigger cascading syncs.
         el.scrollIntoView({ behavior: "auto", block: "center" });
-        // Clear guard after one frame to allow user-initiated scroll events
+
+        // Sync side panes to match the result pane's scroll position
         requestAnimationFrame(() => {
-          programmaticScrollRef.current = false;
+          const centerRatio = pane.scrollHeight > pane.clientHeight
+            ? pane.scrollTop / (pane.scrollHeight - pane.clientHeight)
+            : 0;
+
+          const syncPane = (sideRef: React.RefObject<HTMLDivElement | null>) => {
+            const el = sideRef.current;
+            if (!el) return;
+            const maxScroll = el.scrollHeight - el.clientHeight;
+            if (maxScroll > 0) {
+              el.scrollTop = centerRatio * maxScroll;
+            }
+          };
+
+          syncPane(refs.left);
+          syncPane(refs.right);
+          if (refs.base.current) syncPane(refs.base);
+
+          // Clear guard after syncing so user-initiated scroll events work
+          requestAnimationFrame(() => {
+            programmaticScrollRef.current = false;
+          });
         });
       }
     });
     return () => cancelAnimationFrame(frameId);
-  }, [currentConflictIndex, currentConflictId, scrollCounter, refs.center, programmaticScrollRef]);
+  }, [currentConflictIndex, currentConflictId, scrollCounter, refs.center, refs.left, refs.right, refs.base, programmaticScrollRef]);
 
   // Auto-clear file highlight flashes after the animation finishes (1.5s)
   // Lives in App.tsx so the state persists across panel open/close
