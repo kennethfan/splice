@@ -654,13 +654,37 @@ function App() {
 
   // Start inline editing for a specific conflict
   const handleStartInlineEdit = useCallback((conflict: ConflictBlock) => {
-    const combined = [
-      "// ─── Your version ───",
-      ...conflict.local_lines,
-      "// ─── Their version ───",
-      ...conflict.remote_lines,
-    ];
-    setInlineEditText(combined.join("\n"));
+    // If already resolved, pre-fill with the resolved content instead of markers
+    if (conflict.status !== "Unresolved") {
+      let resolvedText: string;
+      switch (conflict.status) {
+        case "ResolvedWithLocal":
+          resolvedText = conflict.local_lines.join("\n");
+          break;
+        case "ResolvedWithRemote":
+          resolvedText = conflict.remote_lines.join("\n");
+          break;
+        case "ResolvedWithBoth":
+          resolvedText = [...conflict.local_lines, ...conflict.remote_lines].join("\n");
+          break;
+        default:
+          // ResolvedManual — use the stored manual text if available
+          if (typeof conflict.status === 'object' && 'ResolvedManual' in conflict.status) {
+            resolvedText = conflict.status.ResolvedManual;
+          } else {
+            resolvedText = [...conflict.local_lines, ...conflict.remote_lines].join("\n");
+          }
+      }
+      setInlineEditText(resolvedText);
+    } else {
+      const combined = [
+        "// ─── Your version ───",
+        ...conflict.local_lines,
+        "// ─── Their version ───",
+        ...conflict.remote_lines,
+      ];
+      setInlineEditText(combined.join("\n"));
+    }
     setInlineEditId(conflict.id);
   }, []);
 
@@ -1106,26 +1130,94 @@ function App() {
               resolvedLines = nextConflict.local_lines;
           }
 
-          result.push(
-            <div key={`conflict-${nextConflict.id}`} className={`result-resolved-region ${highlightedConflictId === nextConflict.id ? 'result-region--highlighted' : ''}`} data-conflict-id={nextConflict.id}>
-              <div className="result-resolved-badge">
-                <span className="result-resolved-check">✓</span>
-                <span className="result-resolved-label">Resolved</span>
-                <span className="result-resolved-choice">
-                  {nextConflict.status === 'ResolvedWithLocal' ? session.local_branch || 'Yours' : ''}
-                  {nextConflict.status === 'ResolvedWithRemote' ? session.remote_branch || 'Theirs' : ''}
-                  {nextConflict.status === 'ResolvedWithBoth' ? 'Both' : ''}
-                  {typeof nextConflict.status === 'object' && 'ResolvedManual' in nextConflict.status ? 'Manual' : ''}
-                </span>
-              </div>
-              {resolvedLines.map((line, li) => (
-                <div key={li} className="pane-line pane-line--resolved">
-                  <span className="line-number">{lineIdx + li + 1}</span>
-                  <span className="line-text">{line}</span>
+          {
+            const isEditing = inlineEditId === nextConflict.id;
+            result.push(
+              <div key={`conflict-${nextConflict.id}`} className={`result-resolved-region ${highlightedConflictId === nextConflict.id ? 'result-region--highlighted' : ''}`} data-conflict-id={nextConflict.id}>
+                <div className="result-resolved-badge">
+                  <span className="result-resolved-check">✓</span>
+                  <span className="result-resolved-label">Resolved</span>
+                  <span className="result-resolved-choice">
+                    {nextConflict.status === 'ResolvedWithLocal' ? session.local_branch || 'Yours' : ''}
+                    {nextConflict.status === 'ResolvedWithRemote' ? session.remote_branch || 'Theirs' : ''}
+                    {nextConflict.status === 'ResolvedWithBoth' ? 'Both' : ''}
+                    {typeof nextConflict.status === 'object' && 'ResolvedManual' in nextConflict.status ? 'Manual' : ''}
+                  </span>
+                  {!isEditing && (
+                    <button
+                      type="button"
+                      className="result-resolved-edit-btn"
+                      onClick={(e) => { e.stopPropagation(); handleStartInlineEdit(nextConflict); }}
+                      title="Edit the resolved content"
+                    >
+                      ✏
+                    </button>
+                  )}
                 </div>
-              ))}
-            </div>
-          );
+                {isEditing ? (
+                  <div className="inline-editor">
+                    <div className="inline-editor-label">
+                      ✏ Editing resolved content for conflict #{nextConflict.id}
+                    </div>
+                    <textarea
+                      className="inline-editor-textarea"
+                      value={inlineEditText}
+                      onChange={(e) => setInlineEditText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                          e.preventDefault();
+                          handleInlineConfirm(nextConflict.id);
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          handleInlineCancel();
+                        }
+                      }}
+                      spellCheck={false}
+                      autoFocus
+                      placeholder="Edit the resolved content here..."
+                    />
+                    {inlineEditText.trim() && (
+                      <InlinePreview
+                        content={inlineEditText}
+                        fileExtension={session.file_extension}
+                      />
+                    )}
+                    <div className="inline-editor-actions">
+                      <button
+                        type="button"
+                        className="inline-editor-btn inline-editor-btn--cancel"
+                        onClick={handleInlineCancel}
+                      >
+                        ✕ Cancel
+                      </button>
+                      <span className="inline-editor-hint">
+                        {navigator.platform.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to confirm
+                      </span>
+                      <button
+                        type="button"
+                        className="inline-editor-btn inline-editor-btn--apply"
+                        onClick={() => handleInlineConfirm(nextConflict.id)}
+                        disabled={!inlineEditText.trim()}
+                      >
+                        ✓ Apply
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="result-resolved-lines" onClick={() => handleStartInlineEdit(nextConflict)}>
+                    {resolvedLines.map((line, li) => (
+                      <div key={li} className="pane-line pane-line--resolved pane-line--editable">
+                        <span className="line-number">{lineIdx + li + 1}</span>
+                        <span className="line-text">{line}</span>
+                        <span className="pane-line-edit-hint">✏</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          }
           // lineIdx tracks position in all_local_content for syntax highlighting.
           // all_local_content only contains LOCAL lines (not remote). Always advance
           // by the number of local lines, regardless of resolution choice.

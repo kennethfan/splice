@@ -2067,13 +2067,72 @@ html, body, #root {
 }
 
 .result-resolved-choice {
-    margin-left: auto;
     color: var(--text-secondary);
     font-size: 9px;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.3px;
     opacity: 0.7;
+}
+
+.result-resolved-edit-btn {
+    margin-left: auto;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 1px 5px;
+    line-height: 1;
+    transition: all 120ms ease;
+    opacity: 0.5;
+}
+
+.result-resolved-edit-btn:hover {
+    opacity: 1;
+    color: var(--accent-blue);
+    background: rgba(88, 166, 255, 0.12);
+    border-color: rgba(88, 166, 255, 0.3);
+}
+
+.result-resolved-edit-btn:active {
+    transform: scale(0.92);
+}
+
+/* Resolved lines are clickable to re-edit */
+.result-resolved-lines {
+    cursor: pointer;
+}
+
+.result-resolved-lines:hover .pane-line--resolved {
+    background: rgba(86, 211, 100, 0.15);
+}
+
+.result-resolved-lines .pane-line--editable {
+    transition: background 120ms ease;
+    position: relative;
+}
+
+.result-resolved-lines .pane-line--editable:hover {
+    background: rgba(86, 211, 100, 0.20) !important;
+    border-left-color: var(--accent-green) !important;
+}
+
+.pane-line-edit-hint {
+    display: none;
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.result-resolved-lines .pane-line--editable:hover .pane-line-edit-hint {
+    display: inline;
 }
 
 .result-resolved-region .pane-line--resolved {
