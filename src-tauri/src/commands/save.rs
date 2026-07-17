@@ -30,7 +30,7 @@ pub(crate) fn build_result_content(session: &parser::MergeSession) -> String {
         let line = lines[i];
 
         // Check if this line is a conflict start marker
-        if parser::lexer::detect_marker(line).map_or(false, |m| m.marker == "<<<<<<<") {
+        if parser::lexer::detect_marker(line).is_some_and(|m| m.marker == "<<<<<<<") {
             // Find which conflict block this corresponds to
             if let Some(conflict) = session.conflicts.iter().find(|c| c.start_line == line_number) {
                 if conflict.is_resolved() {
@@ -40,7 +40,7 @@ pub(crate) fn build_result_content(session: &parser::MergeSession) -> String {
                     while i < total_lines {
                         let line = lines[i];
                         let is_end = parser::lexer::detect_marker(line)
-                            .map_or(false, |m| m.marker == ">>>>>>>");
+                            .is_some_and(|m| m.marker == ">>>>>>>");
                         if is_end {
                             // Advance i past the end marker. Don't increment
                             // line_number — the outer loop will do that.
@@ -118,7 +118,7 @@ pub fn save_file(
     // Create a backup of the original conflict file (only on first save, and only in non-mergetool mode)
     // In mergetool mode, git already manages its own backup files (app_BACKUP_*)
     if !git::mergetool::is_mergetool_mode() {
-        let backup_path = format!("{}.splice.bak", &file_path);
+        let backup_path = format!("{}.splice.bak", file_path);
         if !std::path::Path::new(&backup_path).exists() {
             let _ = std::fs::write(&backup_path, &session.original_content);
         }

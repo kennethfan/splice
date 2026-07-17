@@ -25,3 +25,11 @@ src-tauri/target/
 *.njsproj
 *.sln
 *.sw?
+
+# agents
+AGENTS.MD
+CLAUDE.MD
+superpowers
+.omo
+.codegraph
+.opencode
