@@ -42,7 +42,10 @@ jobs:
           ./Configure darwin64-x86_64-cc --prefix=/tmp/openssl-x64
           make -j$(sysctl -n hw.logicalcpu)
           make install
+          cd ..
+          rm -rf openssl-3.4.1 openssl-3.4.1.tar.gz 2>/dev/null || true
           echo "OPENSSL_DIR=/tmp/openssl-x64" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/tmp/openssl-x64/lib/pkgconfig" >> $GITHUB_ENV
 
       - run: npm run build
 
