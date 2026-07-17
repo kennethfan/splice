@@ -60,14 +60,20 @@ pub struct WatcherState {
     pub poll_interval_secs: u64,
 }
 
-impl WatcherState {
-    pub fn new() -> Self {
+impl Default for WatcherState {
+    fn default() -> Self {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             watched_repos: Arc::new(Mutex::new(Vec::new())),
             notified_conflicts: Arc::new(Mutex::new(Vec::new())),
             poll_interval_secs: 5,
         }
+    }
+}
+
+impl WatcherState {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
