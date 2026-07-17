@@ -153,7 +153,7 @@ fn compute_word_diff(a: &str, b: &str) -> Vec<WordChange> {
     let mut a_pos: usize = 0;
 
     // Walk through all target (b) tokens, emitting "removed" for replacements
-    for i in 0..b_tokens.len() {
+    for (i, b_token) in b_tokens.iter().enumerate() {
         let hunk = hunks.iter().find(|h| h.after.contains(&(i as u32)));
 
         if let Some(h) = hunk {
@@ -161,9 +161,9 @@ fn compute_word_diff(a: &str, b: &str) -> Vec<WordChange> {
             if !h.before.is_empty() {
                 let start = a_pos;
                 let end = h.before.end as usize;
-                for j in start..end {
+                for token in a_tokens.iter().take(end).skip(start) {
                     changes.push(WordChange {
-                        text: a_tokens[j].clone(),
+                        text: token.clone(),
                         status: "removed".to_string(),
                     });
                 }
@@ -173,18 +173,18 @@ fn compute_word_diff(a: &str, b: &str) -> Vec<WordChange> {
             // Now emit the after-side token
             if h.before.is_empty() {
                 changes.push(WordChange {
-                    text: b_tokens[i].clone(),
+                    text: b_token.clone(),
                     status: "added".to_string(),
                 });
             } else {
                 changes.push(WordChange {
-                    text: b_tokens[i].clone(),
+                    text: b_token.clone(),
                     status: "modified".to_string(),
                 });
             }
         } else {
             changes.push(WordChange {
-                text: b_tokens[i].clone(),
+                text: b_token.clone(),
                 status: "unchanged".to_string(),
             });
             if a_pos < a_tokens.len() {
@@ -196,9 +196,9 @@ fn compute_word_diff(a: &str, b: &str) -> Vec<WordChange> {
     // Pure deletions at the end
     for hunk in &hunks {
         if !hunk.before.is_empty() && hunk.after.is_empty() {
-            for j in hunk.before.start as usize..hunk.before.end as usize {
+            for token in a_tokens.iter().take(hunk.before.end as usize).skip(hunk.before.start as usize) {
                 changes.push(WordChange {
-                    text: a_tokens[j].clone(),
+                    text: token.clone(),
                     status: "removed".to_string(),
                 });
             }

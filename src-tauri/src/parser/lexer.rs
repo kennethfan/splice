@@ -230,7 +230,8 @@ fn collect_line(
     }
 }
 
-//// Finalize the current conflict block and add it to the list.
+/// Finalize the current conflict block and add it to the list.
+#[allow(clippy::too_many_arguments)]
 fn finish_conflict(
     conflicts: &mut Vec<ConflictBlock>,
     local: &mut Vec<String>,

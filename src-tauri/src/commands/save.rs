@@ -30,7 +30,7 @@ pub(crate) fn build_result_content(session: &parser::MergeSession) -> String {
         let line = lines[i];
 
         // Check if this line is a conflict start marker
-        if parser::lexer::detect_marker(line).map_or(false, |m| m.marker == "<<<<<<<") {
+        if parser::lexer::detect_marker(line).is_some_and(|m| m.marker == "<<<<<<<") {
             // Find which conflict block this corresponds to
             if let Some(conflict) = session.conflicts.iter().find(|c| c.start_line == line_number) {
                 if conflict.is_resolved() {
@@ -40,7 +40,7 @@ pub(crate) fn build_result_content(session: &parser::MergeSession) -> String {
                     while i < total_lines {
                         let line = lines[i];
                         let is_end = parser::lexer::detect_marker(line)
-                            .map_or(false, |m| m.marker == ">>>>>>>");
+                            .is_some_and(|m| m.marker == ">>>>>>>");
                         if is_end {
                             // Advance i past the end marker. Don't increment
                             // line_number — the outer loop will do that.
