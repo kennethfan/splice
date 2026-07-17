@@ -1,6 +1,6 @@
 # Splice — Release Workflow
-# Builds for macOS (.app/.dmg), Linux (.deb/.AppImage), and Windows (.msi)
-# on tag push matching v*.*.* (e.g., v0.1.0, v0.2.0).
+# Builds for macOS (.app/.dmg, universal ARM64 + x86_64), Linux (.deb/.AppImage),
+# and Windows (.msi) on tag push matching v*.*.* (e.g., v0.1.0, v0.2.0).
 #
 # Usage:
 #   1. Merge PR to master
@@ -18,29 +18,115 @@ jobs:
   quality:
     uses: ./.github/workflows/test-and-lint.yml
 
-  build-and-release:
-    name: Build and Release (${{ matrix.os }})
+  # ── macOS Universal (single job, cross-compile x86_64 on ARM64 runner) ──
+  build-macos:
+    name: Build macOS (Universal)
     needs: quality
+    runs-on: macos-latest
     permissions:
       contents: write
-    strategy:
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: npm
-
       - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
+      - name: Install ARM64 OpenSSL via Homebrew
+        run: brew install openssl
+
+      - name: Build OpenSSL for x86_64 (cross-compilation)
+        run: |
+          curl -L https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz | tar xz
+          cd openssl-3.4.1
+          ./Configure darwin64-x86_64-cc --prefix=/tmp/openssl-x64
+          make -j$(sysctl -n hw.logicalcpu)
+          make install
+          cd ..
+          rm -rf openssl-3.4.1 openssl-3.4.1.tar.gz 2>/dev/null || true
+
+      - run: npm run build
+
+      - name: Build x86_64 binary
+        run: cargo build --release --target x86_64-apple-darwin
+        working-directory: src-tauri
+        env:
+          OPENSSL_DIR: /tmp/openssl-x64
+          PKG_CONFIG_PATH: /tmp/openssl-x64/lib/pkgconfig
+
+      - name: Build ARM64 binary
+        run: cargo build --release --target aarch64-apple-darwin
+        working-directory: src-tauri
+
+      - name: Create universal binary with lipo
+        run: |
+          mkdir -p target/universal
+          lipo -create -output target/universal/splice \
+            src-tauri/target/aarch64-apple-darwin/release/splice \
+            src-tauri/target/x86_64-apple-darwin/release/splice
+          lipo -info target/universal/splice
+
+      - name: Get version from Cargo.toml
+        run: |
+          APP_VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+
+      - name: Build ARM64 app bundle (.app)
+        run: npx tauri build --bundles app --target aarch64-apple-darwin
+
+      - name: Replace with universal binary, re-sign, create DMG
+        run: |
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Splice.app"
+          cp target/universal/splice "$APP/Contents/MacOS/Splice"
+          codesign --force --sign - --deep "$APP"
+          file "$APP/Contents/MacOS/Splice"
+
+          DMG_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
+          mkdir -p "$DMG_DIR"
+          hdiutil create -volname "Splice" -srcfolder "$APP" \
+            -ov -format UDZO \
+            "$DMG_DIR/Splice_${APP_VERSION}_universal.dmg"
+          echo "DMG_PATH=$DMG_DIR/Splice_${APP_VERSION}_universal.dmg" >> $GITHUB_ENV
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "Splice ${{ github.ref_name }}" \
+            --draft \
+            --notes "## Splice ${{ github.ref_name }}
+
+            ### What's Changed
+            See the [commit log](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for details.
+
+            ### Downloads
+            - **macOS (Universal)**: Apple Silicon + Intel — \`.dmg\` disk image
+            - **Linux**: \`.deb\` and \`.AppImage\`
+            - **Windows**: \`.msi\` installer" || true
+
+          gh release upload "${{ github.ref_name }}" "${{ env.DMG_PATH }}" --clobber
+
+  # ── Linux ──
+  build-linux:
+    name: Build Linux (x86_64)
+    needs: quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Tauri system dependencies (Linux only)
-        if: runner.os == 'Linux'
+      - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -56,15 +142,51 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Splice v__VERSION__"
+          releaseName: "Splice ${{ github.ref_name }}"
           releaseBody: |
-            ## Splice v__VERSION__
+            ## Splice ${{ github.ref_name }}
 
             ### What's Changed
             See the [commit log](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for details.
 
             ### Downloads
-            - **macOS**: `.app` bundle and `.dmg` disk image
+            - **macOS (Universal)**: Apple Silicon + Intel — `.dmg` disk image
+            - **Linux**: `.deb` and `.AppImage`
+            - **Windows**: `.msi` installer
+          releaseDraft: true
+          prerelease: false
+
+  # ── Windows ──
+  build-windows:
+    name: Build Windows (x86_64)
+    needs: quality
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and release with Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Splice ${{ github.ref_name }}"
+          releaseBody: |
+            ## Splice ${{ github.ref_name }}
+
+            ### What's Changed
+            See the [commit log](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for details.
+
+            ### Downloads
+            - **macOS (Universal)**: Apple Silicon + Intel — `.dmg` disk image
             - **Linux**: `.deb` and `.AppImage`
             - **Windows**: `.msi` installer
           releaseDraft: true
