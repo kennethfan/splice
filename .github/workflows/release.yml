@@ -18,73 +18,120 @@ jobs:
   quality:
     uses: ./.github/workflows/test-and-lint.yml
 
-  build-macos:
-    name: Build macOS (Universal)
+  # ── macOS ARM64 (Apple Silicon) ──
+  build-macos-arm64:
+    name: Build macOS (ARM64)
     needs: quality
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm run build
+      - name: Build ARM64 binary
+        run: cargo build --release
+        working-directory: src-tauri
+
+      - name: Upload ARM64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: splice-arm64
+          path: src-tauri/target/release/splice
+
+  # ── macOS x86_64 (Intel) ──
+  build-macos-x64:
+    name: Build macOS (x86_64)
+    needs: quality
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm run build
+      - name: Build x86_64 binary
+        run: cargo build --release
+        working-directory: src-tauri
+
+      - name: Upload x86_64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: splice-x64
+          path: src-tauri/target/release/splice
+
+  # ── macOS Universal (merge ARM64 + x86_64, build .app/.dmg, upload) ──
+  build-macos-universal:
+    name: Build macOS (Universal DMG)
+    needs: [build-macos-arm64, build-macos-x64]
     runs-on: macos-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: npm
-
       - run: npm ci
-
       - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add aarch64-apple-darwin
 
-      - name: Install both Rust targets
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Download ARM64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: splice-arm64
+          path: target/arm64
 
-      - run: npm run build
+      - name: Download x86_64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: splice-x64
+          path: target/x64
 
-      - name: Build x86_64 binary
-        run: cargo build --release --target x86_64-apple-darwin
-        working-directory: src-tauri
-
-      - name: Build ARM64 binary
-        run: cargo build --release --target aarch64-apple-darwin
-        working-directory: src-tauri
+      - name: Create universal binary with lipo
+        run: |
+          mkdir -p target/universal
+          lipo -create -output target/universal/splice \
+            target/arm64/splice \
+            target/x64/splice
+          lipo -info target/universal/splice
 
       - name: Get version from Cargo.toml
         run: |
           APP_VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
 
-      - name: Create universal binary with lipo
-        run: |
-          mkdir -p target/universal/release
-          lipo -create -output target/universal/release/Splice \
-            src-tauri/target/aarch64-apple-darwin/release/splice \
-            src-tauri/target/x86_64-apple-darwin/release/splice
-          lipo -info target/universal/release/Splice
+      - name: Build ARM64 app bundle
+        run: npx tauri build --bundles app --target aarch64-apple-darwin
 
-      - name: Build ARM64 app bundle (.app, .dmg)
-        run: npx tauri build --bundles app,dmg --target aarch64-apple-darwin
-
-      - name: Replace binary with universal + repack DMG
+      - name: Replace binary with universal, repack DMG
         run: |
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Splice.app"
-          cp target/universal/release/Splice "$APP/Contents/MacOS/Splice"
+          cp target/universal/splice "$APP/Contents/MacOS/Splice"
           codesign --force --sign - --deep "$APP"
-
-          # Verify universal binary
           file "$APP/Contents/MacOS/Splice"
 
-          # Create universal DMG
           DMG_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
+          mkdir -p "$DMG_DIR"
           hdiutil create -volname "Splice" -srcfolder "$APP" \
             -ov -format UDZO \
             "$DMG_DIR/Splice_${APP_VERSION}_universal.dmg"
+
+          echo "DMG_PATH=$DMG_DIR/Splice_${APP_VERSION}_universal.dmg" >> $GITHUB_ENV
 
       - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Create the release (idempotent)
           gh release create "${{ github.ref_name }}" \
             --title "Splice ${{ github.ref_name }}" \
             --draft \
@@ -98,12 +145,9 @@ jobs:
             - **Linux**: \`.deb\` and \`.AppImage\`
             - **Windows**: \`.msi\` installer" || true
 
-          # Upload macOS artifacts
-          DMG_NAME="Splice_${APP_VERSION}_universal.dmg"
-          gh release upload "${{ github.ref_name }}" \
-            "src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/${DMG_NAME}" \
-            --clobber
+          gh release upload "${{ github.ref_name }}" "${{ env.DMG_PATH }}" --clobber
 
+  # ── Linux ──
   build-linux:
     name: Build Linux (x86_64)
     needs: quality
@@ -112,14 +156,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: npm
-
       - run: npm ci
-
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Tauri system dependencies
@@ -138,9 +179,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Splice v__VERSION__"
+          releaseName: "Splice ${{ github.ref_name }}"
           releaseBody: |
-            ## Splice v__VERSION__
+            ## Splice ${{ github.ref_name }}
 
             ### What's Changed
             See the [commit log](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for details.
@@ -152,6 +193,7 @@ jobs:
           releaseDraft: true
           prerelease: false
 
+  # ── Windows ──
   build-windows:
     name: Build Windows (x86_64)
     needs: quality
@@ -160,14 +202,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: npm
-
       - run: npm ci
-
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build and release with Tauri
@@ -176,9 +215,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Splice v__VERSION__"
+          releaseName: "Splice ${{ github.ref_name }}"
           releaseBody: |
-            ## Splice v__VERSION__
+            ## Splice ${{ github.ref_name }}
 
             ### What's Changed
             See the [commit log](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for details.
