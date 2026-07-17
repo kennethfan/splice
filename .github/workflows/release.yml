@@ -82,7 +82,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build and release with Tauri
-        uses: tauri-apps/tauri-action@v2
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
