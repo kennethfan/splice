@@ -118,7 +118,7 @@ pub fn save_file(
     // Create a backup of the original conflict file (only on first save, and only in non-mergetool mode)
     // In mergetool mode, git already manages its own backup files (app_BACKUP_*)
     if !git::mergetool::is_mergetool_mode() {
-        let backup_path = format!("{}.splice.bak", &file_path);
+        let backup_path = format!("{}.splice.bak", file_path);
         if !std::path::Path::new(&backup_path).exists() {
             let _ = std::fs::write(&backup_path, &session.original_content);
         }
