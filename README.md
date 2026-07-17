@@ -471,4 +471,4 @@ npx vitest run && cd src-tauri && cargo test && cd .. && npx tsc --noEmit
 
 ## 📝 License
 
-MIT
+APACHE 2.0
