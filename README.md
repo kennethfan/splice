@@ -1,20 +1,16 @@
 # ⛓️ Splice — Git Conflict Resolver
 
-> A native macOS desktop application for resolving Git merge conflicts with a three-pane visual diff editor.
+> **[中文版](./README_CN.md)** | 一款原生的 macOS 桌面应用，提供三栏可视化差异编辑器。
 
-Splice replaces the confusing inline conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) with a clear side-by-side interface, letting you visually compare your changes (`Yours`) against incoming changes (`Theirs`) and the common ancestor (`Base`) to produce a clean merge result.
+A native macOS desktop application for resolving Git merge conflicts with a three-pane visual diff editor.
 
----
-
-## ✨ Features
-
-### 🎯 Why Splice?
-
-Traditional conflict resolution means staring at a terminal full of `<<<<<<<`, `=======`, and `>>>>>>>` markers, manually editing the file to find the right combination. It's error-prone and slow. **Splice gives you a visual diff editor** that shows each version side-by-side with inline conflict actions, keyboard shortcuts for every operation, and a live preview of the merged result.
+Splice replaces the confusing inline conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) with a clear side-by-side interface, letting you visually compare your changes (Yours) against incoming changes (Theirs) and the common ancestor (Base) to produce a clean merge result.
 
 > **IntelliJ IDEA style merge tool, built as a standalone macOS app** — no IDE required.
 
 ---
+
+## ✨ Features
 
 ### 🎯 Core Merge Experience
 
@@ -68,7 +64,7 @@ The editor includes a **live syntax-highlighted preview** that updates as you ty
 
 #### Resolved conflicts — inline textarea
 
-After resolving a conflict, you can continue editing the result **directly in place** — click anywhere on the green resolved text (or the ✏ button) to open an inline textarea. The editor uses a controlled `<textarea>` that correctly handles all code content (including HTML tags like `<div>`, `<T>`). A floating action bar (`✓ Save` / `✕ Cancel`) appears at the bottom. Press `Cmd+Enter` to save or `Esc` to cancel.
+After resolving a conflict, you can continue editing the result **directly in place** — click anywhere on the green resolved text (or the ✏ button) to open an inline textarea. A floating action bar (`✓ Save` / `✕ Cancel`) appears at the bottom. Press `Cmd+Enter` to save or `Esc` to cancel.
 
 This makes it easy to:
 - Tweak the merged result without re-resolving
@@ -121,7 +117,7 @@ The watcher panel lists all tracked repositories, shows the number of pending co
 
 #### Git hooks auto-launch
 
-Toggle **Auto-launch** in the status bar to install Git hooks that automatically open Splice when a `git merge` produces conflicts. No need to run `git mergetool` manually.
+Toggle **Auto-launch** in the status bar to install Git hooks that automatically open Splice when a `git merge` produces conflicts.
 
 #### Branch-aware display
 
@@ -241,7 +237,7 @@ cp -R src-tauri/target/release/bundle/macos/Splice.app /Applications/
 ### Quick start
 
 1. **Open Splice** — You'll see the welcome screen with a `Configure Global Mergetool` button
-2. **Configure git** — Click the button to set Splice as your default mergetool (`git config --global merge.tool splice`)
+2. **Configure git** — Click the button to set Splice as your default mergetool
 3. **Open a conflicted file** — Press `Cmd+O` or click the status bar button, and select a file with Git conflict markers
 
 ### Using with `git mergetool`
@@ -378,7 +374,7 @@ npx tauri build
 
 # 2. The built .app bundle will be at:
 #    src-tauri/target/release/bundle/macos/Splice.app
-#
+
 # 3. Install it to /Applications:
 cp -R src-tauri/target/release/bundle/macos/Splice.app /Applications/
 
