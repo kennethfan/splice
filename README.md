@@ -213,7 +213,7 @@ Click the **overview sidebar** button (or use `Cmd+Shift+O`) to see a summary of
 
 ### Via DMG (recommended)
 
-1. Download the latest `.dmg` from the [Releases](https://github.com/your-org/splice/releases) page
+1. Download the latest `.dmg` from the [Releases](https://github.com/kennethfan/splice/releases) page
 2. Open the `.dmg` and drag `Splice.app` to your `Applications` folder
 3. Right-click `Splice.app` and select **Open** (first launch only, to bypass Gatekeeper)
 
@@ -223,7 +223,7 @@ Click the **overview sidebar** button (or use `Cmd+Shift+O`) to see a summary of
 # Prerequisites: Rust, Node.js, and system dependencies for Tauri v2
 # See: https://v2.tauri.app/start/prerequisites/
 
-git clone https://github.com/your-org/splice.git
+git clone https://github.com/kennethfan/splice.git
 cd splice
 npm install
 npx tauri build

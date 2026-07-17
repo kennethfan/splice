@@ -213,7 +213,7 @@ Splice 支持通过**标签页界面**同时打开多个冲突文件：
 
 ### 通过 DMG 安装（推荐）
 
-1. 从 [Releases](https://github.com/your-org/splice/releases) 页面下载最新的 `.dmg` 文件
+1. 从 [Releases](https://github.com/kennethfan/splice/releases) 页面下载最新的 `.dmg` 文件
 2. 打开 `.dmg` 并将 `Splice.app` 拖入 `Applications` 文件夹
 3. 右键点击 `Splice.app` 选择**打开**（仅首次启动，以绕过 Gatekeeper）
 
@@ -223,7 +223,7 @@ Splice 支持通过**标签页界面**同时打开多个冲突文件：
 # 前置条件：Rust、Node.js 以及 Tauri v2 的系统依赖
 # 详见：https://v2.tauri.app/start/prerequisites/
 
-git clone https://github.com/your-org/splice.git
+git clone https://github.com/kennethfan/splice.git
 cd splice
 npm install
 npx tauri build
