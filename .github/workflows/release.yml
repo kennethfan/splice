@@ -97,7 +97,6 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "Splice ${{ github.ref_name }}" \
-            --draft \
             --notes "## Splice ${{ github.ref_name }}
 
             ### What's Changed
@@ -153,7 +152,7 @@ jobs:
             - **macOS (Universal)**: Apple Silicon + Intel — `.dmg` disk image
             - **Linux**: `.deb` and `.AppImage`
             - **Windows**: `.msi` installer
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
 
   # ── Windows ──
@@ -189,5 +188,5 @@ jobs:
             - **macOS (Universal)**: Apple Silicon + Intel — `.dmg` disk image
             - **Linux**: `.deb` and `.AppImage`
             - **Windows**: `.msi` installer
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
