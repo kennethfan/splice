@@ -35,6 +35,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
+      - name: Install ARM64 OpenSSL via Homebrew
+        run: brew install openssl
+
       - name: Build OpenSSL for x86_64 (cross-compilation)
         run: |
           curl -L https://github.com/openssl/openssl/releases/download/openssl-3.4.1/openssl-3.4.1.tar.gz | tar xz
@@ -44,14 +47,15 @@ jobs:
           make install
           cd ..
           rm -rf openssl-3.4.1 openssl-3.4.1.tar.gz 2>/dev/null || true
-          echo "OPENSSL_DIR=/tmp/openssl-x64" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/tmp/openssl-x64/lib/pkgconfig" >> $GITHUB_ENV
 
       - run: npm run build
 
       - name: Build x86_64 binary
         run: cargo build --release --target x86_64-apple-darwin
         working-directory: src-tauri
+        env:
+          OPENSSL_DIR: /tmp/openssl-x64
+          PKG_CONFIG_PATH: /tmp/openssl-x64/lib/pkgconfig
 
       - name: Build ARM64 binary
         run: cargo build --release --target aarch64-apple-darwin
