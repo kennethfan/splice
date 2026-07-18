@@ -9,6 +9,7 @@ export interface KeyboardHandlers {
   onMagicMerge: () => void;
   onSave: () => void;
   onOpenFile: () => void;
+  onOpenDirectory: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onToggleBasePanel: () => void;
@@ -37,7 +38,7 @@ export function useKeyboard(handlers: KeyboardHandlers) {
       const meta = e.metaKey || e.ctrlKey;
 
       if (meta) {
-        switch (e.key) {
+        switch (e.key.toLowerCase()) {
           case "'":
             e.preventDefault();
             handlers.onAcceptLocal();
@@ -60,7 +61,11 @@ export function useKeyboard(handlers: KeyboardHandlers) {
             break;
           case "o":
             e.preventDefault();
-            handlers.onOpenFile();
+            if (e.shiftKey) {
+              handlers.onOpenDirectory();
+            } else {
+              handlers.onOpenFile();
+            }
             break;
           case "z":
             e.preventDefault();

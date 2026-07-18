@@ -35,6 +35,7 @@ const GROUPS: ShortcutGroup[] = [
     title: "File",
     shortcuts: [
       { keys: "Cmd + O", label: "Open file" },
+      { keys: "Cmd + Shift + O", label: "Open directory (watch repo)" },
       { keys: "Cmd + S", label: "Save resolved file" },
       { keys: "Cmd + W", label: "Close tab" },
     ],

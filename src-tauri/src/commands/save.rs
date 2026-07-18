@@ -4,6 +4,87 @@ use std::sync::Mutex;
 use crate::parser;
 use crate::git;
 
+/// Walk up from a file path to find the git repository root.
+/// Returns the directory containing `.git` (file or directory).
+fn find_repo_root(file_path: &str) -> Result<std::path::PathBuf, String> {
+    let canonical = std::fs::canonicalize(file_path)
+        .map_err(|e| format!("Cannot canonicalize path: {}", e))?;
+
+    let mut dir = canonical
+        .parent()
+        .ok_or_else(|| "Cannot determine parent directory".to_string())?
+        .to_path_buf();
+
+    loop {
+        if dir.join(".git").exists() {
+            return Ok(dir);
+        }
+        // Try parent — if we can't pop (already at root), repo not found
+        if !dir.pop() {
+            return Err(format!(
+                "Not a git repository: no .git found in any parent of '{}'",
+                file_path
+            ));
+        }
+    }
+}
+
+/// Stage the resolved file in the git index to mark the conflict as resolved.
+/// Uses the git2 library directly instead of shelling out to `git add`,
+/// which avoids PATH and working-directory issues when running as a bundled app.
+///
+/// Instead of relying on git2's `Repository::open` to walk up from the file's
+/// parent directory (which can fail with deep Java/maven directory hierarchies,
+/// submodules, or symlinked paths), we first discover the repo root by manually
+/// walking up looking for `.git`, then open the repo from the root explicitly.
+fn stage_in_git(file_path: &str) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(file_path)
+        .map_err(|e| format!("Cannot canonicalize path: {}", e))?;
+
+    // Find repo root by walking up — more robust than git2's auto-discovery
+    let repo_root = find_repo_root(file_path)?;
+
+    let repo = git2::Repository::open(&repo_root)
+        .map_err(|e| format!("Cannot open git repo at {:?}: {}", repo_root, e))?;
+
+    let workdir = repo.workdir().ok_or_else(|| "Repo has no working tree".to_string())?;
+    let relative = pathdiff::diff_paths(&canonical, workdir)
+        .ok_or_else(|| "Cannot compute relative path".to_string())?;
+
+    let mut index = repo.index().map_err(|e| format!("Cannot open index: {}", e))?;
+    index
+        .add_path(&relative)
+        .map_err(|e| format!("Cannot stage file via git2: {}", e))?;
+    index
+        .write()
+        .map_err(|e| format!("Cannot write index via git2: {}", e))?;
+    Ok(())
+}
+
+/// Fallback: stage file using `git add` via CLI.
+/// Used when git2 staging fails for any reason.
+/// Uses `-C <parent>` to ensure git looks for `.git` from the correct directory,
+/// avoiding issues with the bundled app's unpredictable working directory.
+fn stage_in_git_cli(file_path: &str) -> Result<(), String> {
+    // Determine parent directory for -C flag so git can find the repo
+    let parent = std::path::Path::new(file_path)
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or(".");
+
+    let output = std::process::Command::new("git")
+        .args(["-C", parent, "add", file_path])
+        .output()
+        .map_err(|e| format!("Cannot run git add: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("git add failed: {}", stderr.trim()))
+    }
+}
+
 /// Build the resolved result content from the session.
 /// Preserves trailing newline from the original content (if present).
 /// Uses `session.original_content` (with conflict markers) to walk through
@@ -115,8 +196,9 @@ pub fn save_file(
     std::fs::write(&file_path, &result_content)
         .map_err(|e| format!("Failed to write file: {}", e))?;
 
-    // Create a backup of the original conflict file (only on first save, and only in non-mergetool mode)
-    // In mergetool mode, git already manages its own backup files (app_BACKUP_*)
+    // Create a temporary backup of the original conflict file (only on first save, and only in non-mergetool mode).
+    // The backup protects against crashes mid-write. Once the file is saved successfully below, it's removed.
+    // In mergetool mode, git already manages its own backup files (app_BACKUP_*).
     if !git::mergetool::is_mergetool_mode() {
         let backup_path = format!("{}.splice.bak", file_path);
         if !std::path::Path::new(&backup_path).exists() {
@@ -126,8 +208,28 @@ pub fn save_file(
 
     session.saved = true;
 
-    // Drop the lock before potentially exiting
+    // Drop the lock before potentially exiting or doing I/O
     drop(guard);
+
+    if !git::mergetool::is_mergetool_mode() {
+        let backup_path = format!("{}.splice.bak", file_path);
+        let _ = std::fs::remove_file(&backup_path);
+
+        // Stage the resolved file in git to mark the conflict as resolved.
+        // First try git2 (direct, no PATH dependency), then fall back to CLI.
+        if let Err(e) = stage_in_git(&file_path) {
+            eprintln!("Warning: git2 stage failed (trying CLI fallback): {}", e);
+            // If git2 fails, try git add via CLI as a fallback.
+            // This handles edge cases where git2's index handling differs from git's.
+            if let Err(e2) = stage_in_git_cli(&file_path) {
+                eprintln!("Warning: CLI git add also failed: {}", e2);
+                return Err(format!(
+                    "Failed to stage resolved file. Both git2 and CLI fallback failed.\ngit2: {}\nCLI: {}",
+                    e, e2
+                ));
+            }
+        }
+    }
 
     // In mergetool mode, exit after save so git mergetool can pick up the result
     if git::mergetool::is_mergetool_mode() {
@@ -157,6 +259,173 @@ mod tests {
             None,
             content.to_string(), // original content with markers
         )
+    }
+
+    /// Test that `stage_in_git` works for multiple files in the same repo.
+    /// Regression test for: first file stages correctly, subsequent files don't.
+    #[test]
+    fn test_stage_multiple_files_in_repo() {
+        use std::fs;
+        use std::process::Command;
+
+        // Create temp dir for test repo
+        let tmp = std::env::temp_dir().join(format!("splice_test_stage_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Use git CLI to set up repo (more reliable than git2 for setup)
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&tmp)
+                .output()
+                .unwrap();
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                panic!("git command failed: {} {:?}\n{}", args[0], &args[1..], stderr);
+            }
+        };
+
+        run(&["init"]);
+        run(&["config", "user.email", "test@test.com"]);
+        run(&["config", "user.name", "Test"]);
+
+        // Initial commit with two files
+        let file1_path = tmp.join("file1.txt");
+        let file2_path = tmp.join("file2.txt");
+        fs::write(&file1_path, "a\nb\nc\n").unwrap();
+        fs::write(&file2_path, "d\ne\nf\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "base"]);
+
+        // Feature branch
+        run(&["checkout", "-b", "feature"]);
+        fs::write(&file1_path, "a1\nb1\nc1\n").unwrap();
+        fs::write(&file2_path, "d1\ne1\nf1\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "feature-change"]);
+
+        // Back to master, conflicting changes
+        run(&["checkout", "master"]);
+        fs::write(&file1_path, "a2\nb2\nc2\n").unwrap();
+        fs::write(&file2_path, "d2\ne2\nf2\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "master-change"]);
+
+        // Merge to create conflicts
+        let merge_out = Command::new("git")
+            .args(["merge", "feature"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        let merge_stderr = String::from_utf8_lossy(&merge_out.stderr);
+        let merge_stdout = String::from_utf8_lossy(&merge_out.stdout);
+        eprintln!("merge stdout: {}", merge_stdout);
+        eprintln!("merge stderr: {}", merge_stderr);
+        assert!(
+            merge_stderr.contains("CONFLICT") || merge_stdout.contains("CONFLICT"),
+            "Should have merge conflicts. exit={:?} stderr={}",
+            merge_out.status.code(),
+            merge_stderr
+        );
+
+        // Verify both files are conflicted
+        let status_before = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        let status_before = String::from_utf8_lossy(&status_before.stdout);
+        eprintln!("Status before:\n{}", status_before);
+        assert!(status_before.contains("UU file1.txt"), "file1 should be conflicted");
+        assert!(status_before.contains("UU file2.txt"), "file2 should be conflicted");
+
+        // Check merge status
+        let check_status_cmd = || {
+            let out = Command::new("git")
+                .args(["status", "--porcelain"])
+                .current_dir(&tmp)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).to_string()
+        };
+        eprintln!("Status at conflict: {}", check_status_cmd());
+
+        // ── Simulate resolving: write resolved content ──
+        fs::write(&file1_path, "RESOLVED-a\n").unwrap();
+        fs::write(&file2_path, "RESOLVED-d\n").unwrap();
+
+        // Stage file1 using the exact same pattern as stage_in_git
+        eprintln!("\n--- Staging file1 ---");
+        {
+            let repo = git2::Repository::open(tmp.join("file1.txt").parent().unwrap()).unwrap();
+            let workdir = repo.workdir().unwrap().to_path_buf();
+            let canonical = std::fs::canonicalize(&file1_path).unwrap();
+            let relative = pathdiff::diff_paths(&canonical, &workdir).unwrap();
+            eprintln!("file1 canonical: {:?}", canonical);
+            eprintln!("file1 workdir: {:?}", workdir);
+            eprintln!("file1 relative: {:?}", relative);
+            let mut index = repo.index().unwrap();
+            match index.add_path(&relative) {
+                Ok(_) => eprintln!("file1 add_path OK"),
+                Err(e) => eprintln!("file1 add_path ERROR: {:?}", e),
+            }
+            match index.write() {
+                Ok(_) => eprintln!("file1 index.write OK"),
+                Err(e) => eprintln!("file1 index.write ERROR: {:?}", e),
+            }
+        }
+
+        let status_mid = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        eprintln!("Status after file1:\n{}", String::from_utf8_lossy(&status_mid.stdout));
+
+        // Stage file2
+        eprintln!("\n--- Staging file2 ---");
+        {
+            let repo = git2::Repository::open(tmp.join("file2.txt").parent().unwrap()).unwrap();
+            let workdir = repo.workdir().unwrap().to_path_buf();
+            let canonical = std::fs::canonicalize(&file2_path).unwrap();
+            let relative = pathdiff::diff_paths(&canonical, &workdir).unwrap();
+            eprintln!("file2 canonical: {:?}", canonical);
+            eprintln!("file2 workdir: {:?}", workdir);
+            eprintln!("file2 relative: {:?}", relative);
+            let mut index = repo.index().unwrap();
+            match index.add_path(&relative) {
+                Ok(_) => eprintln!("file2 add_path OK"),
+                Err(e) => eprintln!("file2 add_path ERROR: {:?}", e),
+            }
+            match index.write() {
+                Ok(_) => eprintln!("file2 index.write OK"),
+                Err(e) => eprintln!("file2 index.write ERROR: {:?}", e),
+            }
+        }
+
+        let status_final = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        let status_final_str = String::from_utf8_lossy(&status_final.stdout);
+        eprintln!("Status final:\n{}", status_final_str);
+
+        // Verify: both files should show as staged (M in the index column)
+        assert!(
+            status_final_str.contains("M  file1.txt"),
+            "file1 should be staged (M in index column), got:\n{}",
+            status_final_str
+        );
+        assert!(
+            status_final_str.contains("M  file2.txt"),
+            "file2 should be staged (M in index column), got:\n{}",
+            status_final_str
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

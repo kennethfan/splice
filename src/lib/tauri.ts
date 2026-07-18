@@ -49,6 +49,23 @@ export interface MagicMergeResult {
   remaining: number;
 }
 
+export interface BlameLine {
+  author: string;
+  date: string;
+  commit_hash: string;
+  commit_message: string;
+  line_index: number;
+}
+
+/** Blame data for all conflicts, keyed by conflict_id. */
+export type BlameMap = Record<number, BlameLine[]>;
+
+/** Blame information for both sides of a conflict session. */
+export interface SideBlame {
+  local: BlameMap;
+  remote: BlameMap;
+}
+
 export type ResolveAction =
   | "Local"
   | "Remote"
@@ -161,6 +178,15 @@ export async function uninstallConflictHook(): Promise<void> {
 /// Check whether the Splice conflict hooks are installed.
 export async function getConflictHookStatus(): Promise<HookStatus> {
   return invoke<HookStatus>("get_conflict_hook_status");
+}
+
+// ── Blame ──
+
+/** Get blame info for both sides of each conflict.
+ *  `local` is blamed against HEAD, `remote` against MERGE_HEAD.
+ */
+export async function getBlame(filePath: string): Promise<SideBlame> {
+  return invoke<SideBlame>("get_blame", { filePath });
 }
 
 // ── Conflict Watcher Daemon ──
