@@ -1939,6 +1939,25 @@ html, body, #root {
     text-overflow: ellipsis;
 }
 
+/* Blame tooltip indicator on remote side lines */
+.conflict-side-line--blamed {
+    cursor: help;
+    position: relative;
+}
+
+.conflict-side-line--blamed .conflict-side-line-text {
+    border-bottom: 1px dotted rgba(88, 166, 255, 0.3);
+}
+
+.conflict-side-line--blamed:hover .conflict-side-line-text {
+    border-bottom-color: var(--accent-blue);
+}
+
+/* Blame tooltip via native title attribute */
+.conflict-side-line[title] {
+    position: relative;
+}
+
 .conflict-side-buttons {
     display: flex;
     flex-direction: column;

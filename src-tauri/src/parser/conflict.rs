@@ -79,6 +79,32 @@ pub struct MergeSession {
     pub remote_branch: String,
 }
 
+/// Blame information for a single line.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlameLine {
+    /// The author of the commit that last modified this line
+    pub author: String,
+    /// The author date (ISO 8601 or git-format)
+    pub date: String,
+    /// The commit hash
+    pub commit_hash: String,
+    /// The first line of the commit message
+    pub commit_message: String,
+    /// 0-based line index within the conflict block
+    pub line_index: usize,
+}
+
+/// Blame data for all conflicts in a session, keyed by conflict_id.
+pub type BlameMap = std::collections::HashMap<usize, Vec<BlameLine>>;
+
+/// Blame information for both sides of a session.
+/// `local` is blamed against HEAD, `remote` against MERGE_HEAD.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SideBlame {
+    pub local: BlameMap,
+    pub remote: BlameMap,
+}
+
 /// Result returned by the magic merge operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MagicMergeResult {

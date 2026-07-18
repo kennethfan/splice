@@ -79,6 +79,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::blame::get_blame,
             commands::open_file::open_file,
             commands::resolve::resolve_conflict,
             commands::magic_merge::magic_merge,

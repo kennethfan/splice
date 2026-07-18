@@ -1,3 +1,4 @@
+pub mod blame;
 pub mod cleanup_and_exit;
 pub mod open_file;
 pub mod resolve;
@@ -11,6 +12,7 @@ pub mod configure_mergetool;
 pub mod auto_start;
 pub mod initial_session;
 
+pub use blame::*;
 pub use cleanup_and_exit::*;
 pub use open_file::*;
 pub use resolve::*;

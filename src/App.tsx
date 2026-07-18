@@ -12,9 +12,10 @@ import { useSyncScroll } from "./hooks/useSyncScroll";
 import { useKeyboard } from "./hooks/useKeyboard";
 import { open, confirm, message } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import type { MergeSession, ResolveAction, ConflictBlock } from "./lib/tauri";
+import type { MergeSession, ResolveAction, ConflictBlock, SideBlame } from "./lib/tauri";
 import {
   openFile as openFileViaTauri,
+  getBlame,
   resolveConflict,
   magicMerge,
   saveFile,
@@ -70,6 +71,9 @@ function App() {
   // Track which conflict is currently being edited inline in the result pane
   const [inlineEditId, setInlineEditId] = useState<number | null>(null);
   const [inlineEditText, setInlineEditText] = useState("");
+
+  // Blame data for both sides — keyed by conflict_id
+  const [blameData, setBlameData] = useState<SideBlame>({ local: {}, remote: {} });
 
   // Ref to avoid stale activeTabIndex in async callbacks
   const activeTabIndexRef = useRef(activeTabIndex);
@@ -131,6 +135,17 @@ function App() {
     activeFilePath,
     session?.conflicts.length ?? 0,
   );
+
+  // Load blame data for both sides when the active file changes
+  useEffect(() => {
+    if (!activeFilePath || !session) {
+      setBlameData({ local: {}, remote: {} });
+      return;
+    }
+    getBlame(activeFilePath)
+      .then(setBlameData)
+      .catch(() => setBlameData({ local: {}, remote: {} }));
+  }, [activeFilePath, session?.original_content]);
 
   // Filter to unresolved conflicts for navigation
   const unresolvedIndices = session
@@ -1126,12 +1141,19 @@ function App() {
           >
             <div className="conflict-side-lines">
               {sideLines.length > 0 ? (
-                sideLines.map((line, li) => (
-                  <div key={li} className="conflict-side-line">
-                    <span className="line-number conflict-side-line-num">{contentIdx + li + 1}</span>
-                    <span className="conflict-side-line-text">{line}</span>
-                  </div>
-                ))
+                sideLines.map((line, li) => {
+                  const sideBlameMap = side === 'local' ? blameData.local : blameData.remote;
+                  const blame = sideBlameMap[nextConflict.id]?.[li] ?? null;
+                  const tooltip = blame
+                    ? `${blame.author} · ${blame.date} · ${blame.commit_hash}\n${blame.commit_message}`
+                    : undefined;
+                  return (
+                    <div key={li} className={`conflict-side-line ${blame ? 'conflict-side-line--blamed' : ''}`} title={tooltip}>
+                      <span className="line-number conflict-side-line-num">{contentIdx + li + 1}</span>
+                      <span className="conflict-side-line-text">{line}</span>
+                    </div>
+                  );
+                })
               ) : (
                 <div className="conflict-side-line conflict-side-line--empty">
                   <span className="line-number conflict-side-line-num">{contentIdx + 1}</span>
