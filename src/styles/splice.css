@@ -315,6 +315,30 @@ html, body, #root {
     color: var(--text-secondary);
 }
 
+.placeholder-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.btn-open-dir {
+    background: var(--accent-green);
+    color: #000;
+    border: none;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.btn-open-dir:hover {
+    opacity: 0.85;
+}
+
 /* === Conflict Blocks === */
 
 .conflict-block {

@@ -8,6 +8,7 @@ interface WatchedRepoPanelProps {
   repos: WatchedRepoDetail[];
   watcherRunning: boolean;
   refreshKey?: number;
+  defaultExpandedPath?: string;
   highlightedFiles: Record<string, Set<string>>;
   onSetHighlightedFiles: React.Dispatch<React.SetStateAction<Record<string, Set<string>>>>;
   onClose: () => void;
@@ -28,6 +29,7 @@ export function WatchedRepoPanel({
   repos,
   watcherRunning,
   refreshKey,
+  defaultExpandedPath,
   highlightedFiles,
   onSetHighlightedFiles,
   onClose,
@@ -50,6 +52,28 @@ export function WatchedRepoPanel({
     const timer = setTimeout(() => setJustRefreshed(0), 2000);
     return () => clearTimeout(timer);
   }, [justRefreshed]);
+
+  useEffect(() => {
+    if (!defaultExpandedPath) return;
+    if (!isOpen) return;
+    (async () => {
+      if (!repoFiles[defaultExpandedPath]) {
+        setLoadingFiles((prev) => new Set(prev).add(defaultExpandedPath));
+        try {
+          const files = await getRepoConflictedFiles(defaultExpandedPath);
+          setRepoFiles((prev) => ({ ...prev, [defaultExpandedPath]: files }));
+        } catch {
+          setRepoFiles((prev) => ({ ...prev, [defaultExpandedPath]: [] }));
+        }
+        setLoadingFiles((prev) => {
+          const next = new Set(prev);
+          next.delete(defaultExpandedPath);
+          return next;
+        });
+      }
+      setExpandedRepos((prev) => new Set(prev).add(defaultExpandedPath));
+    })();
+  }, [defaultExpandedPath]);
 
   const toggleRepoFiles = useCallback(async (repoPath: string) => {
     if (expandedRepos.has(repoPath)) {

@@ -32,6 +32,7 @@ import {
   removeWatchedRepo,
   getWatcherStatus,
   getWatchedRepoDetails,
+  getRepoConflictedFiles,
   getInitialSession,
 } from "./lib/tauri";
 import { listen } from "@tauri-apps/api/event";
@@ -64,6 +65,7 @@ function App() {
   const [showWatcherPanel, setShowWatcherPanel] = useState(false);
   const [watchedRepoDetails, setWatchedRepoDetails] = useState<WatchedRepoDetail[]>([]);
   const [panelRefreshKey, setPanelRefreshKey] = useState(0);
+  const [autoExpandedRepo, setAutoExpandedRepo] = useState<string | null>(null);
   const [highlightedFiles, setHighlightedFiles] = useState<Record<string, Set<string>>>({});
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
@@ -622,6 +624,59 @@ function App() {
     setLoading(false);
   }, [tabs]);
 
+  const handleOpenDirectory = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: true,
+        title: "Select Git Repository",
+      });
+      if (!selected) {
+        setLoading(false);
+        return;
+      }
+
+      if (!watcherRunning) {
+        const status = await startWatcher();
+        setWatcherRunning(true);
+        setWatchedRepoCount(status.watched_repos.length);
+      }
+
+      const status = await addWatchedRepo(selected);
+      setWatchedRepoCount(status.watched_repos.length);
+      setAutoExpandedRepo(selected);
+      setShowWatcherPanel(true);
+
+      try {
+        const details = await getWatchedRepoDetails();
+        setWatchedRepoDetails(details.repos);
+        const files = await getRepoConflictedFiles(selected);
+        if (files.length === 1) {
+          setShowWatcherPanel(false);
+          setAutoExpandedRepo(null);
+          const existing = tabs.findIndex((t) => t.filePath === files[0]);
+          if (existing >= 0) {
+            setActiveTabIndex(existing);
+            setActiveConflictIndex(0);
+          } else {
+            const result = await openFileViaTauri(files[0]);
+            setTabs((prev) => [...prev, { filePath: files[0], session: result }]);
+            setActiveTabIndex(tabs.length);
+            setActiveConflictIndex(0);
+            setScrollCounter((c) => c + 1);
+          }
+        }
+      } catch {
+        // Panel already opened above — safe to ignore fetch failures
+      }
+    } catch (err) {
+      setError(`⚠️ ${err}`);
+    }
+    setLoading(false);
+  }, [watcherRunning, tabs]);
+
   // Watcher: stop the daemon
   const handleStopWatcher = useCallback(async () => {
     setLoading(true);
@@ -1021,6 +1076,7 @@ function App() {
     onMagicMerge: handleMagicMerge,
     onSave: handleSave,
     onOpenFile: handleOpenFile,
+    onOpenDirectory: handleOpenDirectory,
     onUndo: handleUndo,
     onRedo: handleRedo,
     onToggleBasePanel: handleToggleBase,
@@ -1625,15 +1681,24 @@ function App() {
               <div className="placeholder-text">Splice</div>
               <div className="placeholder-sub">Git Conflict Resolver</div>
               <div className="placeholder-hint">
-                <code>Cmd + O</code> to open a file
+                <code>Cmd + O</code> open file &nbsp;·&nbsp; <code>Cmd + Shift + O</code> open repo
               </div>
-              <button
-                className="btn btn-config"
-                onClick={handleConfigureMergetool}
-                title="Configure Splice as your global git mergetool"
-              >
-                ⚙ Configure Global Mergetool
-              </button>
+              <div className="placeholder-actions">
+                <button
+                  className="btn btn-open-dir"
+                  onClick={handleOpenDirectory}
+                  title="Open a Git repository to browse and resolve all conflicts"
+                >
+                  📂 Open a Git Repository
+                </button>
+                <button
+                  className="btn btn-config"
+                  onClick={handleConfigureMergetool}
+                  title="Configure Splice as your global git mergetool"
+                >
+                  ⚙ Configure Global Mergetool
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -1698,6 +1763,7 @@ function App() {
         onStopWatcher={handleStopWatcher}
         onOpenConflictedFile={handleOpenConflictedFile}
         refreshKey={panelRefreshKey}
+        defaultExpandedPath={autoExpandedRepo ?? undefined}
         highlightedFiles={highlightedFiles}
         onSetHighlightedFiles={setHighlightedFiles}
       />

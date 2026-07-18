@@ -12,6 +12,7 @@ describe("useKeyboard", () => {
     onMagicMerge: vi.fn(),
     onSave: vi.fn(),
     onOpenFile: vi.fn(),
+    onOpenDirectory: vi.fn(),
     onUndo: vi.fn(),
     onRedo: vi.fn(),
     onToggleBasePanel: vi.fn(),
@@ -75,6 +76,12 @@ describe("useKeyboard", () => {
     renderHook(() => useKeyboard(handlers));
     fireKey("o", true);
     expect(handlers.onOpenFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onOpenDirectory on Cmd+Shift+O", () => {
+    renderHook(() => useKeyboard(handlers));
+    fireKey("O", true, true);
+    expect(handlers.onOpenDirectory).toHaveBeenCalledTimes(1);
   });
 
   it("calls onUndo on Cmd+z", () => {
