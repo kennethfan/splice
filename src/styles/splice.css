@@ -523,12 +523,12 @@ html, body, #root {
 .status-bar {
     display: flex;
     align-items: center;
-    padding: 0 12px;
+    padding: 6px 14px;
     background: var(--bg-secondary);
     border-top: 1px solid var(--border-color);
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-secondary);
-    gap: 10px;
+    gap: 12px;
     overflow: hidden;
     min-width: 0;
 }
@@ -586,16 +586,16 @@ html, body, #root {
 
 .status-bar-progress-text {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
 }
 
 .status-bar-progress {
-    width: 48px;
-    height: 4px;
+    width: 52px;
+    height: 6px;
     background: var(--bg-tertiary);
-    border-radius: 2px;
+    border-radius: 3px;
     overflow: hidden;
     flex-shrink: 0;
 }
@@ -618,9 +618,9 @@ html, body, #root {
 .status-bar-badge {
     display: inline-flex;
     align-items: center;
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11px;
     font-family: var(--font-mono);
     font-weight: 600;
     letter-spacing: 0.2px;
@@ -662,11 +662,11 @@ html, body, #root {
 .status-bar-diff {
     display: flex;
     align-items: center;
-    gap: 4px;
-    font-size: 10px;
+    gap: 5px;
+    font-size: 11px;
     font-family: var(--font-mono);
     flex-shrink: 0;
-    padding: 1px 6px;
+    padding: 2px 8px;
     background: rgba(255, 255, 255, 0.03);
     border-radius: 3px;
     border: 1px solid var(--border-light);
@@ -674,7 +674,7 @@ html, body, #root {
 
 .status-bar-diff-label {
     color: var(--text-muted);
-    font-size: 9px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.3px;
 }
@@ -703,24 +703,24 @@ html, body, #root {
 
 .status-bar-nav-pos {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
-    min-width: 30px;
+    min-width: 32px;
     text-align: center;
 }
 
 .status-bar-hint {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     white-space: nowrap;
 }
 
 .status-bar-hint code {
     background: var(--bg-tertiary);
-    padding: 1px 5px;
+    padding: 1px 6px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
 }
 
@@ -732,7 +732,7 @@ html, body, #root {
 }
 
 .status-bar-version {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     font-family: var(--font-mono);
 }
