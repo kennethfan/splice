@@ -115,8 +115,9 @@ pub fn save_file(
     std::fs::write(&file_path, &result_content)
         .map_err(|e| format!("Failed to write file: {}", e))?;
 
-    // Create a backup of the original conflict file (only on first save, and only in non-mergetool mode)
-    // In mergetool mode, git already manages its own backup files (app_BACKUP_*)
+    // Create a temporary backup of the original conflict file (only on first save, and only in non-mergetool mode).
+    // The backup protects against crashes mid-write. Once the file is saved successfully below, it's removed.
+    // In mergetool mode, git already manages its own backup files (app_BACKUP_*).
     if !git::mergetool::is_mergetool_mode() {
         let backup_path = format!("{}.splice.bak", file_path);
         if !std::path::Path::new(&backup_path).exists() {
@@ -126,8 +127,13 @@ pub fn save_file(
 
     session.saved = true;
 
-    // Drop the lock before potentially exiting
+    // Drop the lock before potentially exiting or doing I/O
     drop(guard);
+
+    if !git::mergetool::is_mergetool_mode() {
+        let backup_path = format!("{}.splice.bak", file_path);
+        let _ = std::fs::remove_file(&backup_path);
+    }
 
     // In mergetool mode, exit after save so git mergetool can pick up the result
     if git::mergetool::is_mergetool_mode() {
