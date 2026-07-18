@@ -4,20 +4,48 @@ use std::sync::Mutex;
 use crate::parser;
 use crate::git;
 
-/// Stage the resolved file in the git index to mark the conflict as resolved.
-/// Uses the git2 library directly instead of shelling out to `git add`,
-/// which avoids PATH and working-directory issues when running as a bundled app.
-fn stage_in_git(file_path: &str) -> Result<(), String> {
-    // Canonicalize to resolve symlinks (e.g. /Users -> /System/Volumes/Data/Users on macOS)
+/// Walk up from a file path to find the git repository root.
+/// Returns the directory containing `.git` (file or directory).
+fn find_repo_root(file_path: &str) -> Result<std::path::PathBuf, String> {
     let canonical = std::fs::canonicalize(file_path)
         .map_err(|e| format!("Cannot canonicalize path: {}", e))?;
 
-    let parent = canonical
+    let mut dir = canonical
         .parent()
-        .ok_or_else(|| "Cannot determine parent directory".to_string())?;
+        .ok_or_else(|| "Cannot determine parent directory".to_string())?
+        .to_path_buf();
 
-    let repo =
-        git2::Repository::open(parent).map_err(|e| format!("Cannot open git repo: {}", e))?;
+    loop {
+        if dir.join(".git").exists() {
+            return Ok(dir);
+        }
+        // Try parent — if we can't pop (already at root), repo not found
+        if !dir.pop() {
+            return Err(format!(
+                "Not a git repository: no .git found in any parent of '{}'",
+                file_path
+            ));
+        }
+    }
+}
+
+/// Stage the resolved file in the git index to mark the conflict as resolved.
+/// Uses the git2 library directly instead of shelling out to `git add`,
+/// which avoids PATH and working-directory issues when running as a bundled app.
+///
+/// Instead of relying on git2's `Repository::open` to walk up from the file's
+/// parent directory (which can fail with deep Java/maven directory hierarchies,
+/// submodules, or symlinked paths), we first discover the repo root by manually
+/// walking up looking for `.git`, then open the repo from the root explicitly.
+fn stage_in_git(file_path: &str) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(file_path)
+        .map_err(|e| format!("Cannot canonicalize path: {}", e))?;
+
+    // Find repo root by walking up — more robust than git2's auto-discovery
+    let repo_root = find_repo_root(file_path)?;
+
+    let repo = git2::Repository::open(&repo_root)
+        .map_err(|e| format!("Cannot open git repo at {:?}: {}", repo_root, e))?;
 
     let workdir = repo.workdir().ok_or_else(|| "Repo has no working tree".to_string())?;
     let relative = pathdiff::diff_paths(&canonical, workdir)
@@ -35,9 +63,17 @@ fn stage_in_git(file_path: &str) -> Result<(), String> {
 
 /// Fallback: stage file using `git add` via CLI.
 /// Used when git2 staging fails for any reason.
+/// Uses `-C <parent>` to ensure git looks for `.git` from the correct directory,
+/// avoiding issues with the bundled app's unpredictable working directory.
 fn stage_in_git_cli(file_path: &str) -> Result<(), String> {
+    // Determine parent directory for -C flag so git can find the repo
+    let parent = std::path::Path::new(file_path)
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or(".");
+
     let output = std::process::Command::new("git")
-        .args(["add", file_path])
+        .args(["-C", parent, "add", file_path])
         .output()
         .map_err(|e| format!("Cannot run git add: {}", e))?;
 
@@ -187,6 +223,10 @@ pub fn save_file(
             // This handles edge cases where git2's index handling differs from git's.
             if let Err(e2) = stage_in_git_cli(&file_path) {
                 eprintln!("Warning: CLI git add also failed: {}", e2);
+                return Err(format!(
+                    "Failed to stage resolved file. Both git2 and CLI fallback failed.\ngit2: {}\nCLI: {}",
+                    e, e2
+                ));
             }
         }
     }

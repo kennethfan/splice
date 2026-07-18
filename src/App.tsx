@@ -273,7 +273,7 @@ function App() {
 
       const result = await openFileViaTauri(selected);
       setTabs((prev) => [...prev, { filePath: selected, session: result }]);
-      setActiveTabIndex(tabs.length);
+      setActiveTabIndex(tabsRef.current.length);
       setActiveConflictIndex(0);
       setScrollCounter((c) => c + 1); // force auto-scroll to first conflict
       // Auto-add the file's repo to the conflict watcher
@@ -614,7 +614,7 @@ function App() {
 
       const result = await openFileViaTauri(filePath);
       setTabs((prev) => [...prev, { filePath, session: result }]);
-      setActiveTabIndex(tabs.length);
+      setActiveTabIndex(tabsRef.current.length);
       setActiveConflictIndex(0);
       setScrollCounter((c) => c + 1); // force auto-scroll to first conflict
       setShowWatcherPanel(false);
@@ -663,7 +663,7 @@ function App() {
           } else {
             const result = await openFileViaTauri(files[0]);
             setTabs((prev) => [...prev, { filePath: files[0], session: result }]);
-            setActiveTabIndex(tabs.length);
+            setActiveTabIndex(tabsRef.current.length);
             setActiveConflictIndex(0);
             setScrollCounter((c) => c + 1);
           }
