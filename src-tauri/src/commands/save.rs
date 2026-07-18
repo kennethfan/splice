@@ -133,6 +133,14 @@ pub fn save_file(
     if !git::mergetool::is_mergetool_mode() {
         let backup_path = format!("{}.splice.bak", file_path);
         let _ = std::fs::remove_file(&backup_path);
+
+        // Stage the file in git to mark the conflict as resolved.
+        // In mergetool mode git handles this automatically when the tool exits;
+        // in directory mode we must do it explicitly so `git status` no longer
+        // shows the file as "both modified".
+        let _ = std::process::Command::new("git")
+            .args(["add", &file_path])
+            .output();
     }
 
     // In mergetool mode, exit after save so git mergetool can pick up the result
