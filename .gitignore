@@ -29,7 +29,7 @@ src-tauri/target/
 # agents
 AGENTS.MD
 CLAUDE.MD
-superpowers
 .omo
+.superpowers
 .codegraph
 .opencode
